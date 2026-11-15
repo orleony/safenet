@@ -2,6 +2,8 @@ import Foundation
 
 public enum Reason: Equatable {
     case ipNotAllowed, countryNotAllowed, unconfirmed, ipv6Leak, dnsLeak, routeLeak, networkChanged
+    /// Produced only by `Guard` (frozen because there is no network; never closes).
+    case offline
 }
 
 public enum Verdict: Equatable {

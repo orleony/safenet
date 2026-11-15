@@ -160,6 +160,25 @@ public final class Freezer {
         }
     }
 
+    /// Like `resumeAll`, but only for the given pids (per-app unfreeze while other apps stay
+    /// frozen). Other journaled entries are kept untouched. Returns the given pids that are
+    /// still journaled (unresolved: retry later).
+    @discardableResult
+    public func resume(_ pids: Set<Int32>) -> Set<Int32> {
+        guard !pids.isEmpty else { return [] }
+        return withLock {
+            var entries = journal.load()
+            for (pid, start) in frozen { entries[pid] = start }
+            let subset = entries.filter { pids.contains($0.key) }
+            let remaining = Self.resume(subset, table: table, signaler: signaler, selfPID: selfPID, myUID: myUID)
+            var next = entries.filter { !pids.contains($0.key) }
+            for (pid, start) in remaining { next[pid] = start }
+            frozen = next
+            if !subset.isEmpty { try? journal.save(next) }
+            return Set(remaining.keys)
+        }
+    }
+
     /// Startup recovery: resumes whatever a previous run left in the journal.
     @discardableResult
     public func reconcile() -> Set<Int32> { resumeAll() }

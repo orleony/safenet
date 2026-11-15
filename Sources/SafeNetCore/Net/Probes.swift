@@ -39,6 +39,14 @@ public protocol TraceFetcher {
 
 public enum RouteProbeError: Error { case badHost, badStatus, badBody, timeout }
 
+/// Refuses every redirect: the trace must come from the AI host itself, never from somewhere it points to.
+public final class NoRedirectDelegate: NSObject, URLSessionTaskDelegate {
+    public func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
+                           newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
+        completionHandler(nil)
+    }
+}
+
 /// URLSession-based fetcher: ephemeral session (no cookies/cache), default system proxy handling (PAC out of scope),
 /// body capped at 4 KB.
 public struct URLSessionTraceFetcher: TraceFetcher {
@@ -68,7 +76,7 @@ public struct URLSessionTraceFetcher: TraceFetcher {
         var req = URLRequest(url: url)
         req.httpMethod = "GET"
         req.timeoutInterval = requestTimeout
-        let (bytes, resp) = try await session.bytes(for: req)
+        let (bytes, resp) = try await session.bytes(for: req, delegate: NoRedirectDelegate())
         guard let http = resp as? HTTPURLResponse, http.statusCode == 200 else { throw RouteProbeError.badStatus }
         var data = Data()
         for try await b in bytes {
@@ -101,14 +109,11 @@ public struct RouteProbe {
         }
     }
 
-    static func validHost(_ h: String) -> Bool {
-        !h.isEmpty && h.utf8.count <= 253 && h.utf8.allSatisfy {
-            ($0 >= 97 && $0 <= 122) || ($0 >= 65 && $0 <= 90) || ($0 >= 48 && $0 <= 57) || $0 == 45 || $0 == 46
-        }
-    }
+    /// Privacy: only these five AI hosts may ever be contacted (no IP literals, localhost or anything else).
+    static func validHost(_ h: String) -> Bool { URLSessionTraceFetcher.hosts.contains(h) }
 
     static func probe(host: String, fetcher: TraceFetcher, timeout: TimeInterval) async -> RouteResult {
-        guard validHost(host) else { return RouteResult(host: host, ip: nil, country: nil, error: "bad host name") }
+        guard validHost(host) else { return RouteResult(host: host, ip: nil, country: nil, error: "host not allowed") }
         do {
             let body = try await withDeadline(timeout) { try await fetcher.fetch(host: host) }
             guard let t = parseTrace(body) else { return RouteResult(host: host, ip: nil, country: nil, error: "unparseable trace") }
@@ -139,21 +144,22 @@ private func allowed(_ a: IPAnswer, _ allow: AllowList) -> Bool {
     return !c.isEmpty && allow.countries.contains { $0.uppercased() == c }
 }
 
-/// Route leak: any AI-service trace that came back with an address/country outside the allow list.
-/// Hosts that errored are NOT counted as leaks (nothing was learned; the IP check still guards the main path).
-public func detectRouteLeak(_ results: [RouteResult], allow: AllowList) -> Bool {
-    results.contains { r in
-        guard r.error == nil, let ip = r.ip else { return false }
-        return !allowed(IPAnswer(ip: ip, country: r.country ?? ""), allow)
-    }
+/// Route leak decision. Missing information never reads as clean:
+///  - `nil`: the route check was not evaluated (disabled, no protected apps, first probe pending) -> false;
+///  - non-nil but ZERO successful results (empty, or every host failed) -> true (unconfirmed route);
+///  - otherwise individual host errors are ignored, and any successful trace outside the allow list -> true.
+public func detectRouteLeak(_ results: [RouteResult]?, allow: AllowList) -> Bool {
+    guard let results = results else { return false }
+    let ok = results.filter { $0.error == nil && $0.ip != nil }
+    if ok.isEmpty { return true }
+    return ok.contains { !allowed(IPAnswer(ip: $0.ip!, country: $0.country ?? ""), allow) }
 }
 
-/// IPv6 leak heuristic: the machine has a global IPv6 address on a physical interface AND some IP service
-/// answered over IPv6 with an address outside the allow list. (Whether the IPv4 answer is allowed does not matter:
-/// a disallowed v6 path is a leak in every case.) No v6 answer, or no global v6 address, is never a leak.
-public func detectIPv6Leak(hasGlobalIPv6: Bool, answers: [IPAnswer], allow: AllowList) -> Bool {
-    guard hasGlobalIPv6 else { return false }
-    return answers.contains { $0.ip.contains(":") && !allowed($0, allow) }
+/// IPv6 leak: an IPv6 answer observed from an IP service that is outside the allow list IS a leak.
+/// The local interface scan (`NetSnapshot.hasGlobalIPv6`) may only decide whether to probe IPv6 at all;
+/// it must never dismiss an observed disallowed answer.
+public func detectIPv6Leak(answers: [IPAnswer], allow: AllowList) -> Bool {
+    answers.contains { $0.ip.contains(":") && !allowed($0, allow) }
 }
 
 // MARK: DNS
@@ -232,16 +238,33 @@ public func detectDNSLeak(resolvers: [DNSResolver], hasTunnel: Bool) -> Bool {
 // MARK: Sampler
 
 public enum NetworkSampler {
-    /// Pure mapping of everything measured in one cycle to the guard's `Observation`.
-    /// `allow` is the effective allow list (the caller picks the common or a per-app one).
-    public static func makeObservation(snapshot: NetSnapshot, answers: [IPAnswer], routes: [RouteResult],
-                                       resolvers: [DNSResolver], allow: AllowList, config: Config) -> Observation {
-        Observation(
+    public struct Sample: Equatable {
+        public var observation: Observation
+        /// DNS data was unreadable/empty while a tunnel exists and the DNS check is on (UI may warn under .warn).
+        public var dnsUnknown: Bool
+    }
+
+    /// Pure mapping of everything measured in one cycle. `allow` is the effective allow list.
+    /// `routes == nil` means the route check was not evaluated; `resolvers == nil` (or empty) means unknown DNS.
+    public static func makeSample(snapshot: NetSnapshot, answers: [IPAnswer], routes: [RouteResult]?,
+                                  resolvers: [DNSResolver]?, allow: AllowList, config: Config) -> Sample {
+        let dnsUnknown = config.dnsCheck != .off && snapshot.hasTunnel && (resolvers ?? []).isEmpty
+        let dnsLeak: Bool
+        if config.dnsCheck == .off { dnsLeak = false }
+        else if dnsUnknown { dnsLeak = config.dnsCheck == .block }
+        else { dnsLeak = detectDNSLeak(resolvers: resolvers ?? [], hasTunnel: snapshot.hasTunnel) }
+        let obs = Observation(
             online: snapshot.online,
             ips: answers,
-            ipv6Leak: config.checkIPv6 && detectIPv6Leak(hasGlobalIPv6: snapshot.hasGlobalIPv6, answers: answers, allow: allow),
-            dnsLeak: config.dnsCheck != .off && detectDNSLeak(resolvers: resolvers, hasTunnel: snapshot.hasTunnel),
+            ipv6Leak: config.checkIPv6 && detectIPv6Leak(answers: answers, allow: allow),
+            dnsLeak: dnsLeak,
             routeLeak: config.routeCheck && detectRouteLeak(routes, allow: allow),
             trustedNetwork: isTrusted(snapshot, config.trustedNetworks))
+        return Sample(observation: obs, dnsUnknown: dnsUnknown)
+    }
+
+    public static func makeObservation(snapshot: NetSnapshot, answers: [IPAnswer], routes: [RouteResult]?,
+                                       resolvers: [DNSResolver]?, allow: AllowList, config: Config) -> Observation {
+        makeSample(snapshot: snapshot, answers: answers, routes: routes, resolvers: resolvers, allow: allow, config: config).observation
     }
 }

@@ -138,9 +138,9 @@ func registerNetTests() {
 
     // MARK: Route probe
     test("testRouteProbeReportsErrorsAsErrors") {
-        let p = RouteProbe(fetcher: FakeFetcher(responses: ["a.example": trace("203.0.113.7", "NL"), "bad.example": "garbage"]), timeout: 2)
-        let r = awaitResult { await p.check(hosts: ["a.example", "bad.example", "down.example"]) }
-        expectEqual(r.map { $0.host }, ["a.example", "bad.example", "down.example"])
+        let p = RouteProbe(fetcher: FakeFetcher(responses: ["claude.ai": trace("203.0.113.7", "NL"), "chatgpt.com": "garbage"]), timeout: 2)
+        let r = awaitResult { await p.check(hosts: ["claude.ai", "chatgpt.com", "api.openai.com"]) }
+        expectEqual(r.map { $0.host }, ["claude.ai", "chatgpt.com", "api.openai.com"])
         expectEqual(r[0].ip, "203.0.113.7"); expectEqual(r[0].country, "NL"); expect(r[0].error == nil)
         for i in 1...2 { expect(r[i].error != nil && r[i].ip == nil && r[i].country == nil, "host \(i) must be an error") }
     }
@@ -149,12 +149,34 @@ func registerNetTests() {
         let r = awaitResult { await p.check(hosts: ["evil.com/x?y", ""]) }
         expect(r.count == 2 && r.allSatisfy { $0.error != nil })
     }
+    test("testRouteProbeOnlyContactsAllowedAIHosts") {
+        final class Rec: TraceFetcher { var hosts: [String] = []; let l = NSLock()
+            func note(_ h: String) { l.lock(); hosts.append(h); l.unlock() }
+            func fetch(host: String) async throws -> String { note(host); return "ip=1.2.3.4\nloc=NL" } }
+        let rec = Rec()
+        let bad = ["127.0.0.1", "localhost", "[::1]", "evil.example", "CLAUDE.AI.evil.com", "169.254.169.254", "claude.ai.", "8.8.8.8"]
+        let r = awaitResult { await RouteProbe(fetcher: rec, timeout: 1).check(hosts: bad + ["claude.ai"]) }
+        expectEqual(rec.hosts, ["claude.ai"])
+        expectEqual(r.filter { $0.error != nil }.count, bad.count)
+        expect(r.last?.error == nil)
+    }
+    test("testTraceFetcherRefusesRedirects") {
+        let d = NoRedirectDelegate()
+        let url = URL(string: "https://claude.ai/cdn-cgi/trace")!
+        let resp = HTTPURLResponse(url: url, statusCode: 302, httpVersion: nil, headerFields: ["Location": "https://evil.example/"])!
+        var called = false, got: URLRequest? = URLRequest(url: url)
+        let t = URLSession.shared.dataTask(with: url)
+        d.urlSession(URLSession.shared, task: t, willPerformHTTPRedirection: resp,
+                     newRequest: URLRequest(url: URL(string: "https://evil.example/")!)) { got = $0; called = true }
+        t.cancel()
+        expect(called && got == nil)
+    }
     test("testRouteProbeTimeout") {
         struct Slow: TraceFetcher {
             func fetch(host: String) async throws -> String { try await Task.sleep(nanoseconds: 5_000_000_000); return "" }
         }
         let t0 = Date()
-        let r = awaitResult { await RouteProbe(fetcher: Slow(), timeout: 0.3).check(hosts: ["a.example"]) }
+        let r = awaitResult { await RouteProbe(fetcher: Slow(), timeout: 0.3).check(hosts: ["claude.ai"]) }
         expect(Date().timeIntervalSince(t0) < 2)
         expect(r.first?.error != nil)
     }
@@ -162,9 +184,14 @@ func registerNetTests() {
         let allow = AllowList(ips: ["203.0.113.7"], countries: [])
         let ok = RouteResult(host: "a", ip: "203.0.113.7", country: "NL", error: nil)
         let bad = RouteResult(host: "b", ip: "198.51.100.9", country: "RU", error: nil)
+        let err = RouteResult(host: "c", ip: nil, country: nil, error: "x")
         expect(!detectRouteLeak([ok], allow: allow))
-        expect(detectRouteLeak([ok, bad], allow: allow))
-        expect(!detectRouteLeak([RouteResult(host: "c", ip: nil, country: nil, error: "x")], allow: allow), "errors are not leaks")
+        expect(detectRouteLeak([ok, bad], allow: allow), "one bad result")
+        expect(!detectRouteLeak([ok, err], allow: allow), "partial errors ignored")
+        expect(detectRouteLeak([err], allow: allow), "all errors = unconfirmed")
+        expect(detectRouteLeak([err, err], allow: allow))
+        expect(detectRouteLeak([], allow: allow), "empty = unconfirmed")
+        expect(!detectRouteLeak(nil, allow: allow), "nil = not evaluated")
         expect(!detectRouteLeak([RouteResult(host: "b", ip: "198.51.100.9", country: "NL", error: nil)],
                                 allow: AllowList(ips: [], countries: ["NL"])), "allowed by country")
         expect(detectRouteLeak([bad], allow: AllowList()), "empty allow list allows nothing")
@@ -175,10 +202,9 @@ func registerNetTests() {
         let allow = AllowList(ips: ["203.0.113.7"], countries: [])
         let v4 = IPAnswer(ip: "203.0.113.7", country: "NL")
         let v6 = IPAnswer(ip: "2a02:db8::5", country: "RU")
-        expect(detectIPv6Leak(hasGlobalIPv6: true, answers: [v4, v6], allow: allow))
-        expect(!detectIPv6Leak(hasGlobalIPv6: true, answers: [v4], allow: allow), "no v6 answer")
-        expect(!detectIPv6Leak(hasGlobalIPv6: false, answers: [v4, v6], allow: allow), "no global v6 on the machine")
-        expect(!detectIPv6Leak(hasGlobalIPv6: true, answers: [v4, IPAnswer(ip: "2a02:db8::5", country: "NL")],
+        expect(detectIPv6Leak(answers: [v4, v6], allow: allow), "observed disallowed v6 is a leak regardless of local scan")
+        expect(!detectIPv6Leak(answers: [v4], allow: allow), "no v6 answer")
+        expect(!detectIPv6Leak(answers: [v4, IPAnswer(ip: "2a02:db8::5", country: "NL")],
                                allow: AllowList(ips: ["2a02:db8::/32"], countries: [])), "v6 allowed by CIDR")
     }
 
@@ -266,7 +292,7 @@ func registerNetTests() {
         let router = DNSResolver(address: "192.168.1.1", interface: "en0", scoped: false)
 
         let clean = NetworkSampler.makeObservation(snapshot: snap(tunnel: true, mac: "de:ad:be:ef:00:01", v6: true), answers: [v4],
-                                                   routes: [], resolvers: [], allow: cfg.allow, config: cfg)
+                                                   routes: nil, resolvers: [DNSResolver(address: "10.8.0.1", interface: "utun4", scoped: false)], allow: cfg.allow, config: cfg)
         expectEqual(clean, Observation(online: true, ips: [v4], ipv6Leak: false, dnsLeak: false, routeLeak: false, trustedNetwork: false))
 
         let leaky = NetworkSampler.makeObservation(snapshot: snap(tunnel: true, mac: "de:ad:be:ef:00:01", v6: true), answers: [v4, v6],
@@ -279,9 +305,80 @@ func registerNetTests() {
                                                       routes: [routeBad], resolvers: [router], allow: off.allow, config: off)
         expect(!disabled.ipv6Leak && !disabled.dnsLeak && !disabled.routeLeak)
 
-        let trusted = NetworkSampler.makeObservation(snapshot: snap(), answers: [], routes: [], resolvers: [], allow: cfg.allow, config: cfg)
+        let trusted = NetworkSampler.makeObservation(snapshot: snap(), answers: [], routes: nil, resolvers: nil, allow: cfg.allow, config: cfg)
         expect(trusted.trustedNetwork && trusted.online)
-        let offline = NetworkSampler.makeObservation(snapshot: snap(online: false), answers: [], routes: [], resolvers: [], allow: cfg.allow, config: cfg)
+        let offline = NetworkSampler.makeObservation(snapshot: snap(online: false), answers: [], routes: nil, resolvers: nil, allow: cfg.allow, config: cfg)
         expect(!offline.online)
+    }
+
+    test("testSamplerRouteAndDNSUnknownRules") {
+        var cfg = Config.default
+        cfg.allow = AllowList(ips: ["203.0.113.7"], countries: [])
+        let tun = snap(tunnel: true, mac: "de:ad:be:ef:00:01")
+        let v4 = IPAnswer(ip: "203.0.113.7", country: "NL")
+        let okRoute = RouteResult(host: "claude.ai", ip: "203.0.113.7", country: "NL", error: nil)
+        let errRoute = RouteResult(host: "claude.ai", ip: nil, country: nil, error: "x")
+        let utunDNS = [DNSResolver(address: "10.8.0.1", interface: "utun4", scoped: false)]
+        func s(_ c: Config, routes: [RouteResult]?, res: [DNSResolver]?, snapshot: NetSnapshot = tun) -> NetworkSampler.Sample {
+            NetworkSampler.makeSample(snapshot: snapshot, answers: [v4], routes: routes, resolvers: res, allow: cfg.allow, config: c)
+        }
+        expect(!s(cfg, routes: nil, res: utunDNS).observation.routeLeak, "nil = not evaluated")
+        expect(s(cfg, routes: [], res: utunDNS).observation.routeLeak, "empty")
+        expect(s(cfg, routes: [errRoute], res: utunDNS).observation.routeLeak, "all errors")
+        expect(!s(cfg, routes: [errRoute, okRoute], res: utunDNS).observation.routeLeak, "partial errors")
+        var noRoute = cfg; noRoute.routeCheck = false
+        expect(!s(noRoute, routes: [], res: utunDNS).observation.routeLeak, "check disabled")
+
+        var warn = cfg; warn.dnsCheck = .warn
+        var block = cfg; block.dnsCheck = .block
+        var off = cfg; off.dnsCheck = .off
+        let w = s(warn, routes: nil, res: nil)
+        expect(!w.observation.dnsLeak && w.dnsUnknown, "warn: no freeze, but flagged unknown")
+        expect(s(warn, routes: nil, res: []).dnsUnknown, "empty = unknown")
+        let b = s(block, routes: nil, res: nil)
+        expect(b.observation.dnsLeak && b.dnsUnknown, "block: unknown DNS with tunnel freezes")
+        expect(s(block, routes: nil, res: []).observation.dnsLeak)
+        let o = s(off, routes: nil, res: nil)
+        expect(!o.observation.dnsLeak && !o.dnsUnknown)
+        let noTun = s(block, routes: nil, res: nil, snapshot: snap(tunnel: false))
+        expect(!noTun.observation.dnsLeak && !noTun.dnsUnknown, "no tunnel: DNS unknown is irrelevant")
+        expect(!s(block, routes: nil, res: utunDNS).observation.dnsLeak && !s(block, routes: nil, res: utunDNS).dnsUnknown)
+    }
+
+    // MARK: Monitor lifecycle (injected snapshot source, offline)
+    test("testMonitorStopFromOnChangeDoesNotHang") {
+        let done = DispatchSemaphore(value: 0)
+        var mon: NetworkMonitor?
+        mon = NetworkMonitor(debounce: 0.01, snapshotSource: { _ in snap() }, onChange: { _ in mon?.stop(); done.signal() })
+        mon!.start()
+        expect(done.wait(timeout: .now() + 5) == .success, "callback delivered and stop() returned")
+        mon!.stop()
+        mon = nil
+    }
+    test("testMonitorStartStopStart") {
+        let l = NSLock(); var n = 0
+        let first = DispatchSemaphore(value: 0), second = DispatchSemaphore(value: 0)
+        let mon = NetworkMonitor(debounce: 0.01, snapshotSource: { _ in snap() }, onChange: { _ in
+            l.lock(); n += 1; let c = n; l.unlock()
+            if c == 1 { first.signal() } else if c == 2 { second.signal() } })
+        mon.start(); mon.start()
+        expect(first.wait(timeout: .now() + 5) == .success)
+        mon.stop(); mon.stop()
+        mon.start()
+        expect(second.wait(timeout: .now() + 5) == .success, "restart re-emits the first snapshot")
+        mon.stop()
+        Thread.sleep(forTimeInterval: 0.2)
+        l.lock(); let c = n; l.unlock()
+        expectEqual(c, 2)
+    }
+    test("testMonitorDroppedWithoutStopIsSafe") {
+        for _ in 0..<20 {
+            var mon: NetworkMonitor? = NetworkMonitor(debounce: 0.001, snapshotSource: { _ in snap() }, onChange: { _ in })
+            mon!.start()
+            Thread.sleep(forTimeInterval: 0.005)
+            mon = nil
+        }
+        Thread.sleep(forTimeInterval: 0.2)
+        expect(true)
     }
 }

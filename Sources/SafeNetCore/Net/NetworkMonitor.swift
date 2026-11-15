@@ -176,95 +176,138 @@ public enum SnapshotBuilder {
     }
 }
 
-/// `scutil --dns` through a runner (empty on failure).
-public func currentDNSResolvers(runner: CommandRunner = ProcessCommandRunner()) -> [DNSResolver] {
-    runner.run("/usr/sbin/scutil", ["--dns"], timeout: 3).map(parseScutilDNS) ?? []
+/// `scutil --dns` through a runner. nil = unknown (command failed or timed out); an empty array is also "unknown" to the sampler.
+public func currentDNSResolvers(runner: CommandRunner = ProcessCommandRunner()) -> [DNSResolver]? {
+    runner.run("/usr/sbin/scutil", ["--dns"], timeout: 3).map(parseScutilDNS)
 }
 
 // MARK: Monitor
 
+/// Weak holder so SCDynamicStore callbacks never touch a deallocated monitor.
+private final class WeakMonitor { weak var m: NetworkMonitor?; init(_ m: NetworkMonitor) { self.m = m } }
+
 /// Watches NWPathMonitor + SystemConfiguration (global IPv4/IPv6/DNS/Proxies) and reports a fresh snapshot
-/// ~50 ms after the last change event. Calls `onChange` only when the snapshot differs from the previous one
-/// (always for the first). `onChange` runs on an internal serial queue.
+/// ~50 ms after the last change event. `onChange` fires only when the snapshot differs from the previous one
+/// (always for the first after `start()`), on a separate callback queue, so `stop()` may be called from
+/// inside `onChange` (or from any thread) without deadlock. After `stop()` returns no new callback is started.
 public final class NetworkMonitor {
     private let onChange: (NetSnapshot) -> Void
-    private let runner: CommandRunner
     private let queue = DispatchQueue(label: "safenet.networkmonitor")
+    private let callbackQueue = DispatchQueue(label: "safenet.networkmonitor.callback")
     private let debounce: TimeInterval
+    private let lock = NSLock()
+    // guarded by `lock`
     private var pathMonitor: NWPathMonitor?
     private var store: SCDynamicStore?
     private var pending: DispatchWorkItem?
     private var pathSatisfied = false
     private var last: NetSnapshot?
     private var running = false
+    private var generation = 0
 
+    /// `snapshotSource` is injectable for offline tests; the default builds the real snapshot
+    /// (receives whether NWPath is satisfied).
     public init(debounce: TimeInterval = 0.05, runner: CommandRunner = ProcessCommandRunner(),
-                onChange: @escaping (NetSnapshot) -> Void) {
-        self.debounce = debounce; self.runner = runner; self.onChange = onChange
+                snapshotSource: ((Bool) -> NetSnapshot)? = nil, onChange: @escaping (NetSnapshot) -> Void) {
+        self.debounce = debounce; self.onChange = onChange
+        let src = snapshotSource ?? { sat in
+            SnapshotBuilder.build(interfaces: SnapshotBuilder.systemInterfaces(), pathSatisfied: sat,
+                                  proxy: SnapshotBuilder.systemProxy(), runner: runner)
+        }
+        self.sourceWithPath = src
     }
+    private let sourceWithPath: (Bool) -> NetSnapshot
 
     public func start() {
-        queue.async { [self] in
-            guard !running else { return }
-            running = true
-            let pm = NWPathMonitor()
-            pm.pathUpdateHandler = { [weak self] path in
-                guard let self = self else { return }
-                self.queue.async { self.pathSatisfied = path.status == .satisfied; self.schedule() }
-            }
-            pm.start(queue: queue)
-            pathMonitor = pm
+        lock.lock()
+        if running { lock.unlock(); return }
+        running = true; generation += 1; last = nil
+        let gen = generation
 
-            var ctx = SCDynamicStoreContext(version: 0, info: Unmanaged.passUnretained(self).toOpaque(),
-                                            retain: nil, release: nil, copyDescription: nil)
-            let cb: SCDynamicStoreCallBack = { _, _, info in
-                guard let info = info else { return }
-                let me = Unmanaged<NetworkMonitor>.fromOpaque(info).takeUnretainedValue()
-                me.schedule()
-            }
-            if let s = SCDynamicStoreCreate(nil, "SafeNet.monitor" as CFString, cb, &ctx) {
-                let keys = ["State:/Network/Global/IPv4", "State:/Network/Global/IPv6",
-                            "State:/Network/Global/DNS", "State:/Network/Global/Proxies"] as CFArray
-                SCDynamicStoreSetNotificationKeys(s, keys, nil)
-                SCDynamicStoreSetDispatchQueue(s, queue)
-                store = s
-            }
-            schedule()
+        let pm = NWPathMonitor()
+        pm.pathUpdateHandler = { [weak self] path in
+            guard let self = self else { return }
+            self.lock.lock(); self.pathSatisfied = path.status == .satisfied; self.lock.unlock()
+            self.schedule(gen)
         }
+        pm.start(queue: queue)
+        pathMonitor = pm
+
+        var ctx = SCDynamicStoreContext(version: 0, info: Unmanaged.passRetained(WeakMonitor(self)).toOpaque(),
+                                        retain: nil,
+                                        release: { Unmanaged<WeakMonitor>.fromOpaque($0).release() },
+                                        copyDescription: nil)
+        let cb: SCDynamicStoreCallBack = { _, _, info in
+            guard let info = info else { return }
+            let w = Unmanaged<WeakMonitor>.fromOpaque(info).takeUnretainedValue()
+            if let me = w.m { me.scheduleCurrent() }
+        }
+        if let s = SCDynamicStoreCreate(nil, "SafeNet.monitor" as CFString, cb, &ctx) {
+            let keys = ["State:/Network/Global/IPv4", "State:/Network/Global/IPv6",
+                        "State:/Network/Global/DNS", "State:/Network/Global/Proxies"] as CFArray
+            SCDynamicStoreSetNotificationKeys(s, keys, nil)
+            SCDynamicStoreSetDispatchQueue(s, queue)
+            store = s
+        } else {
+            Unmanaged<WeakMonitor>.fromOpaque(ctx.info!).release()
+        }
+        lock.unlock()
+        schedule(gen)
     }
 
+    /// Safe from any thread, including from inside `onChange`.
     public func stop() {
-        queue.sync {
-            running = false
-            pending?.cancel(); pending = nil
-            pathMonitor?.cancel(); pathMonitor = nil
-            if let s = store { SCDynamicStoreSetDispatchQueue(s, nil) }
-            store = nil
-        }
+        lock.lock()
+        running = false; generation += 1
+        let pm = pathMonitor, s = store, p = pending
+        pathMonitor = nil; store = nil; pending = nil; last = nil
+        lock.unlock()
+        p?.cancel(); pm?.cancel()
+        if let s = s { SCDynamicStoreSetDispatchQueue(s, nil) }
     }
 
     deinit {
         pathMonitor?.cancel()
         if let s = store { SCDynamicStoreSetDispatchQueue(s, nil) }
+        pending?.cancel()
     }
 
-    /// Force a re-evaluation (e.g. before a check cycle).
-    public func refresh() { queue.async { self.pending?.cancel(); self.emit() } }
+    /// Force a re-evaluation now.
+    public func refresh() {
+        lock.lock(); let gen = generation, r = running; lock.unlock()
+        guard r else { return }
+        queue.async { [weak self] in self?.emit(gen) }
+    }
 
-    private func schedule() {
-        queue.async { [self] in
-            guard running else { return }
-            pending?.cancel()
-            let w = DispatchWorkItem { [weak self] in self?.emit() }
-            pending = w
-            queue.asyncAfter(deadline: .now() + debounce, execute: w)
+    fileprivate func scheduleCurrent() {
+        lock.lock(); let gen = generation; lock.unlock()
+        schedule(gen)
+    }
+
+    private func schedule(_ gen: Int) {
+        lock.lock()
+        guard running, gen == generation else { lock.unlock(); return }
+        pending?.cancel()
+        let w = DispatchWorkItem { [weak self] in self?.emit(gen) }
+        pending = w
+        lock.unlock()
+        queue.asyncAfter(deadline: .now() + debounce, execute: w)
+    }
+
+    private func emit(_ gen: Int) {
+        lock.lock()
+        guard running, gen == generation else { lock.unlock(); return }
+        let sat = pathSatisfied
+        lock.unlock()
+        let snap = sourceWithPath(sat)
+        lock.lock()
+        guard running, gen == generation, snap != last else { lock.unlock(); return }
+        last = snap
+        lock.unlock()
+        callbackQueue.async { [weak self] in
+            guard let self = self else { return }
+            self.lock.lock(); let ok = self.running && self.generation == gen; self.lock.unlock()
+            if ok { self.onChange(snap) }
         }
-    }
-
-    private func emit() {
-        guard running else { return }
-        let snap = SnapshotBuilder.build(interfaces: SnapshotBuilder.systemInterfaces(), pathSatisfied: pathSatisfied,
-                                         proxy: SnapshotBuilder.systemProxy(), runner: runner)
-        if snap != last { last = snap; onChange(snap) }
     }
 }

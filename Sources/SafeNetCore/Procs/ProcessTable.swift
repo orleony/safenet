@@ -36,6 +36,12 @@ public struct ProcInfo: Equatable {
 
 public protocol ProcessTable {
     func list() -> [ProcInfo]
+    /// Like `list()`, but nil when the listing failed (unknown state, as opposed to "no processes").
+    func snapshot() -> [ProcInfo]?
+}
+
+extension ProcessTable {
+    public func snapshot() -> [ProcInfo]? { list() }
 }
 
 // MARK: - Never-freeze list
@@ -127,19 +133,22 @@ public struct AppMatcher: Equatable {
 public struct SystemProcessTable: ProcessTable {
     public init() {}
 
-    public func list() -> [ProcInfo] {
+    public func list() -> [ProcInfo] { snapshot() ?? [] }
+
+    public func snapshot() -> [ProcInfo]? {
         var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_ALL]
         let stride = MemoryLayout<kinfo_proc>.stride
         var kps: [kinfo_proc] = []
         var count = 0
         for _ in 0..<5 {                       // the table can grow between the two calls
             var size = 0
-            guard sysctl(&mib, 3, nil, &size, nil, 0) == 0, size > 0 else { return [] }
+            guard sysctl(&mib, 3, nil, &size, nil, 0) == 0, size > 0 else { return nil }
             kps = [kinfo_proc](repeating: kinfo_proc(), count: size / stride + 64)
             size = kps.count * stride
             if sysctl(&mib, 3, &kps, &size, nil, 0) == 0 { count = size / stride; break }
-            if errno != ENOMEM { return [] }
+            if errno != ENOMEM { return nil }
         }
+        guard count > 0 else { return nil }
         var argBuf = [UInt8](repeating: 0, count: SystemProcessTable.argMax())
         var out: [ProcInfo] = []
         out.reserveCapacity(count)

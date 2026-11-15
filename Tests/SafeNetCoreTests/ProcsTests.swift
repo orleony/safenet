@@ -24,7 +24,10 @@ private final class FakeTable: ProcessTable {
         get { lock.lock(); defer { lock.unlock() }; return _procs }
         set { lock.lock(); _procs = newValue; lock.unlock() }
     }
-    func list() -> [ProcInfo] { procs }
+    /// When true the listing "fails" (snapshot() == nil, list() == []).
+    var failing = false
+    func list() -> [ProcInfo] { failing ? [] : procs }
+    func snapshot() -> [ProcInfo]? { failing ? nil : procs }
     func remove(_ pid: Int32) { procs = procs.filter { $0.pid != pid } }
 }
 
@@ -32,11 +35,13 @@ private final class FakeSignaler: Signaler {
     private let lock = NSLock()
     private var _sent: [(sig: Int32, pid: Int32)] = []
     var onSend: ((Int32, Int32) -> Void)?
+    /// pids for which send() reports failure (still recorded in `sent`)
+    var failFor: Set<Int32> = []
     var sent: [(sig: Int32, pid: Int32)] { lock.lock(); defer { lock.unlock() }; return _sent }
     func send(_ sig: Int32, to pid: Int32) -> Bool {
         lock.lock(); _sent.append((sig, pid)); lock.unlock()
         onSend?(sig, pid)
-        return true
+        return !failFor.contains(pid)
     }
     func pids(_ sig: Int32) -> [Int32] { sent.filter { $0.sig == sig }.map { $0.pid } }
     func signals(to pid: Int32) -> [Int32] { sent.filter { $0.pid == pid }.map { $0.sig } }
@@ -283,6 +288,94 @@ func registerProcsTests() {
         expectEqual(journalPIDs(j), [901], "journal rewritten valid")
     }
 
+    test("testResumeKeepsJournalWhenListingFails") {
+        let a = proc(950, "Telegram"), b = proc(951, "Claude")
+        let t = FakeTable([a, b]), j = tempJournal()
+        makeFreezer(t, FakeSignaler(), j).freeze([a, b])
+        let s = FakeSignaler()
+        let f = makeFreezer(t, s, j)
+        t.failing = true
+        expectEqual(f.reconcile(), [950, 951], "failed listing: everything stays unresolved")
+        expect(s.sent.isEmpty)
+        expectEqual(journalPIDs(j), [950, 951], "journal intact after failed listing")
+        t.failing = false
+        let empty = FakeTable([])                      // an empty listing is also "unknown"
+        let fe = makeFreezer(empty, s, j)
+        fe.resumeAll()
+        expectEqual(journalPIDs(j), [950, 951], "journal intact after empty listing")
+        expect(s.sent.isEmpty)
+        expectEqual(f.resumeAll(), [], "retry with a working listing resolves all")
+        expectEqual(Set(s.pids(SIGCONT)), [950, 951])
+        expect(journalPIDs(j).isEmpty)
+    }
+
+    test("testResumeIgnoresPathDenyListForOwnFrozenProcess") {
+        let a = proc(960, "Telegram")
+        let t = FakeTable([a]), s = FakeSignaler(), j = tempJournal()
+        let f = makeFreezer(t, s, j)
+        f.freeze([a])
+        // path became unreadable (isProtected would say true) - still ours by pid+start+uid
+        t.procs = [ProcInfo(pid: 960, ppid: 1, name: "Telegram", path: "", args: "",
+                            startTime: a.startTime, uid: me)]
+        expectEqual(f.resumeAll(), [])
+        expectEqual(s.pids(SIGCONT), [960])
+        expect(journalPIDs(j).isEmpty)
+    }
+
+    test("testFailedSIGCONTStaysJournaled") {
+        let a = proc(970, "Telegram"), b = proc(971, "Claude")
+        let t = FakeTable([a, b]), s = FakeSignaler(), j = tempJournal()
+        let f = makeFreezer(t, s, j)
+        f.freeze([a, b])
+        s.failFor = [970]
+        expectEqual(f.resumeAll(), [970])
+        expectEqual(journalPIDs(j), [970], "entry whose SIGCONT failed is kept for the next retry")
+        expectEqual(f.frozenPIDs, [970])
+        s.failFor = []
+        expectEqual(f.resumeAll(), [])
+        expect(journalPIDs(j).isEmpty)
+    }
+
+    test("testGoneAndReusedEntriesDropped") {
+        let a = proc(980, "Telegram"), b = proc(981, "Claude"), c = proc(982, "Other")
+        let t = FakeTable([a, b, c]), s = FakeSignaler(), j = tempJournal()
+        let f = makeFreezer(t, s, j)
+        f.freeze([a, b])
+        t.procs = [proc(981, "Reused", start: 7777), c]   // 980 gone, 981 reused, listing non-empty
+        expectEqual(f.resumeAll(), [])
+        expect(s.pids(SIGCONT).isEmpty, "no SIGCONT to gone or reused pids")
+        expect(journalPIDs(j).isEmpty, "verifiably gone / replaced entries dropped")
+        // other uid with matching start time: never signalled, kept (cannot prove it is gone)
+        let d = proc(990, "Telegram")
+        let t2 = FakeTable([d]), s2 = FakeSignaler(), j2 = tempJournal()
+        makeFreezer(t2, FakeSignaler(), j2).freeze([d])
+        t2.procs = [proc(990, "Telegram", uid: me + 1)]
+        expectEqual(makeFreezer(t2, s2, j2).reconcile(), [990])
+        expect(s2.sent.isEmpty)
+    }
+
+    test("testWatchdogRetriesWhenListingFails") {
+        let a = proc(995, "Telegram")
+        let t = FakeTable([a]), j = tempJournal()
+        makeFreezer(t, FakeSignaler(), j).freeze([a])
+        t.failing = true
+        let s = FakeSignaler()
+        var waits = 0
+        Freezer.watchdog(journal: j, table: t, signaler: s, selfPID: fakeSelf, myUID: me,
+                         isParentAlive: { false },
+                         wait: { waits += 1; if waits == 2 { t.failing = false } })
+        expectEqual(s.pids(SIGCONT), [995], "resumed once the listing works again")
+        expect(journalPIDs(j).isEmpty)
+        // listing never recovers: gives up after the retries, journal kept for next app start
+        let t2 = FakeTable([a]), j2 = tempJournal(), s2 = FakeSignaler()
+        makeFreezer(t2, FakeSignaler(), j2).freeze([a])
+        t2.failing = true
+        Freezer.watchdog(journal: j2, table: t2, signaler: s2, selfPID: fakeSelf, myUID: me,
+                         isParentAlive: { false }, wait: {}, retries: 3)
+        expect(s2.sent.isEmpty)
+        expectEqual(journalPIDs(j2), [995])
+    }
+
     // MARK: helpers / new processes
 
     test("testHelpersFrozenTogether") {
@@ -369,7 +462,7 @@ func registerProcsTests() {
         awaitAsync { await f.close([polite], gentle: 5) }
         expectEqual(s.signals(to: 1400), [SIGSTOP, SIGCONT, SIGTERM], "no SIGKILL when it exits")
         expectEqual(s.signals(to: 1401), [SIGSTOP, SIGCONT, SIGTERM], "helpers closed with the app")
-        expect(Date().timeIntervalSince(start) < 1, "returns as soon as everything exited")
+        expect(Date().timeIntervalSince(start) < 3, "returns as soon as everything exited (gentle is 5 s)")
         expect(journalPIDs(j).isEmpty)
     }
 

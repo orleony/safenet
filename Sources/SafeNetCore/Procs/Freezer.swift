@@ -144,19 +144,25 @@ public final class Freezer {
         return freeze(candidates)
     }
 
-    /// Sends SIGCONT to every journaled process whose start time still matches, then clears the journal.
-    public func resumeAll() {
+    /// Sends SIGCONT to every journaled process whose identity (pid + start time + uid) still
+    /// matches. An entry leaves the journal only when SIGCONT succeeded or the process is
+    /// verifiably gone / replaced; everything else stays journaled for the next retry
+    /// (reconcile, quit, watchdog). Returns the pids still journaled.
+    @discardableResult
+    public func resumeAll() -> Set<Int32> {
         withLock {
             var entries = journal.load()
             for (pid, start) in frozen { entries[pid] = start }
-            Self.resume(entries, table: table, signaler: signaler, selfPID: selfPID, myUID: myUID)
-            frozen = [:]
-            try? journal.save([:])
+            let remaining = Self.resume(entries, table: table, signaler: signaler, selfPID: selfPID, myUID: myUID)
+            frozen = remaining
+            try? journal.save(remaining)
+            return Set(remaining.keys)
         }
     }
 
     /// Startup recovery: resumes whatever a previous run left in the journal.
-    public func reconcile() { resumeAll() }
+    @discardableResult
+    public func reconcile() -> Set<Int32> { resumeAll() }
 
     /// Closes the processes and their descendants: SIGCONT (a stopped process cannot handle
     /// SIGTERM), SIGTERM, wait up to `gentle` seconds, then SIGKILL the survivors.
@@ -235,27 +241,47 @@ public final class Freezer {
     }
 
     /// Testable core of the watchdog.
+    /// After the parent died, retries unresolved entries up to `retries` times (one `wait()`
+    /// apart, ~0.5 s each in production), keeping them journaled for the next app start.
     static func watchdog(journal url: URL, table: ProcessTable, signaler: Signaler, selfPID: Int32, myUID: uid_t,
-                         isParentAlive: () -> Bool, wait: () -> Void) {
+                         isParentAlive: () -> Bool, wait: () -> Void, retries: Int = 20) {
         while isParentAlive() { wait() }
         let j = FreezeJournal(url: url)
-        let entries = j.load()
-        guard !entries.isEmpty else { return }
-        resume(entries, table: table, signaler: signaler, selfPID: selfPID, myUID: myUID)
-        try? j.save([:])
+        var entries = j.load()
+        var attempt = 0
+        while !entries.isEmpty {
+            let remaining = resume(entries, table: table, signaler: signaler, selfPID: selfPID, myUID: myUID)
+            if remaining != entries { try? j.save(remaining) }
+            entries = remaining
+            attempt += 1
+            if entries.isEmpty || attempt > retries { break }
+            wait()
+        }
     }
 
     // MARK: Internals
 
-    private static func resume(_ entries: [Int32: Double], table: ProcessTable, signaler: Signaler,
-                               selfPID: Int32, myUID: uid_t) {
-        guard !entries.isEmpty else { return }
-        let byPID = index(table.list())
+    /// Resumes journaled processes; returns the entries that are still unresolved.
+    /// Only identity is checked (pid > 1, not ourselves, our uid, same start time), not the
+    /// path-based deny-list: SIGCONT to a process we stopped ourselves is benign, and a
+    /// transiently unreadable path must not leave it stopped.
+    /// A failed or empty listing means "unknown": nothing is signalled and nothing dropped.
+    static func resume(_ entries: [Int32: Double], table: ProcessTable, signaler: Signaler,
+                       selfPID: Int32, myUID: uid_t) -> [Int32: Double] {
+        guard !entries.isEmpty else { return [:] }
+        guard let snap = table.snapshot(), !snap.isEmpty else { return entries }
+        let byPID = index(snap)
+        var remaining: [Int32: Double] = [:]
         for pid in entries.keys.sorted() {
-            guard let c = byPID[pid], same(c.startTime, entries[pid]!),
-                  !isProtected(c, selfPID: selfPID, myUID: myUID) else { continue }
-            _ = signaler.send(SIGCONT, to: pid)
+            let start = entries[pid]!
+            guard let c = byPID[pid] else { continue }               // verifiably gone
+            guard same(c.startTime, start) else { continue }         // pid reused: not ours
+            guard pid > 1, pid != selfPID, c.uid == myUID, c.uid != 0 else {
+                remaining[pid] = start; continue                     // cannot signal safely now
+            }
+            if !signaler.send(SIGCONT, to: pid) { remaining[pid] = start }
         }
+        return remaining
     }
 
     private func protected(_ p: ProcInfo) -> Bool { isProtected(p, selfPID: selfPID, myUID: myUID) }

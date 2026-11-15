@@ -180,8 +180,14 @@ func registerConfigTests() {
         h.truncateFile(atOffset: 0)
         h.write(Data("grace: 12\n".utf8))
         h.closeFile()
-        expect(sem.wait(timeout: .now() + 2) == .success, "in-place write after replace not seen")
-        expectEqual(graces.value.last ?? 0, 12)
+        // truncate briefly leaves an empty file, which may be reloaded as defaults (grace 20)
+        // before the "grace: 12" write is seen: wait until 12 arrives, not just for any event.
+        let deadline = DispatchTime.now() + 4
+        var seen12 = false
+        while !seen12, sem.wait(timeout: deadline) == .success {
+            seen12 = graces.value.last == 12
+        }
+        expect(seen12, "in-place write after replace not seen: \(graces.value)")
         store.stopWatching()
     }
 

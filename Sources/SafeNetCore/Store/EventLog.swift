@@ -108,6 +108,9 @@ public final class EventLog {
 
     // MARK: API
 
+    /// Appends one event. I/O failures (full disk, unwritable path, EIO) are swallowed on purpose:
+    /// history must never crash the app. Counters are updated (in memory and sidecar) only after the
+    /// line was actually written, so stats never count an event that is not in the file.
     public func append(_ e: Event) {
         guard var line = try? encoder().encode(e) else { return }
         line.append(0x0A)
@@ -115,19 +118,25 @@ public final class EventLog {
         var s = loadCounters()
         ensureDir()
         if !FileManager.default.fileExists(atPath: url.path) {
-            FileManager.default.createFile(atPath: url.path, contents: nil)
+            guard FileManager.default.createFile(atPath: url.path, contents: nil) else { return }
         }
-        guard let h = try? FileHandle(forWritingTo: url) else { return }
-        let size = h.seekToEndOfFile()
-        // Ensure a previous unterminated/corrupted tail cannot glue onto this record.
-        if size > 0, let r = try? FileHandle(forReadingFrom: url) {
-            r.seek(toFileOffset: size - 1)
-            if r.readData(ofLength: 1) != Data([0x0A]) { h.write(Data([0x0A])) }
-            r.closeFile()
+        var newSize: UInt64 = 0
+        do {
+            let h = try FileHandle(forUpdating: url)
+            defer { try? h.close() }
+            let size = try h.seekToEnd()
+            // Ensure a previous unterminated/corrupted tail cannot glue onto this record.
+            if size > 0 {
+                try h.seek(toOffset: size - 1)
+                let last = try h.read(upToCount: 1)
+                try h.seekToEnd()
+                if last != Data([0x0A]) { try h.write(contentsOf: Data([0x0A])) }
+            }
+            try h.write(contentsOf: line)
+            newSize = try h.offset()
+        } catch {
+            return
         }
-        h.write(line)
-        let newSize = h.offsetInFile
-        h.closeFile()
         apply(e, to: &s)
         counters = s
         persist(s)

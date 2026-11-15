@@ -151,4 +151,18 @@ func registerEventLogTests() {
         expectEqual(e.id.count, 36)
         expect(abs(e.date.timeIntervalSinceNow) < 5)
     }
+
+    test("testAppendFailureDoesNotCrashAndRecovers") {
+        let url = tmpLogURL(); defer { cleanup(url) }
+        // Make the log path a directory: opening it for writing must fail, not trap.
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        let log = EventLog(url: url)
+        log.append(ev(.closed, 1))
+        expectEqual(log.stats(), Stats(resumedInTime: 0, closed: 0, freezes: 0), "failed write must not count")
+        expectEqual(log.recent(limit: 10, kinds: nil).count, 0)
+        try FileManager.default.removeItem(at: url)
+        log.append(ev(.closed, 2))
+        expectEqual(log.recent(limit: 10, kinds: nil).map { $0.id }, ["id2"])
+        expectEqual(log.stats().closed, 1)
+    }
 }

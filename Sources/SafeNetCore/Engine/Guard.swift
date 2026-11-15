@@ -4,15 +4,18 @@ import Foundation
 ///
 /// Aggregation rule (precedence top to bottom):
 ///  1. `.paused(until:)`  the user paused protection (all apps resumed, nothing is frozen);
-///  2. `.frozen(...)`     at least one app is frozen. `since` = earliest freeze start among frozen
-///                        apps; `deadline` = earliest close deadline among them (nil when none has a
-///                        countdown: offline, or `keep_frozen` after the timeout); `reason` = reason
-///                        of the app owning that earliest deadline (else of the earliest frozen app,
-///                        ties broken by config order);
+///  2. `.frozen(...)`     at least one app is in the frozen phase (stopped, or should be stopped
+///                        but freezing failed). `since` = earliest freeze start among them;
+///                        `deadline` = earliest close deadline (nil when none has a countdown:
+///                        offline, or `keep_frozen` after the timeout); `reason` = `.freezeFailed`
+///                        when ANY of them could not be stopped (it is running unrestricted), else
+///                        the reason of the app owning the earliest deadline (else of the earliest
+///                        frozen app, ties broken by config order);
 ///  3. `.closed(date)`    no app is frozen, and at least one app was closed (timeout or "close now")
 ///                        and has not had a passing check since; date = latest close;
 ///  4. `.ok`              everything else, including apps released by `on_timeout: resume`
 ///                        (see `releasedApps`).
+/// `deadline` is a display value (wall clock = now + remaining monotonic time).
 public enum GuardState: Equatable {
     case ok
     case frozen(since: Date, reason: Reason, deadline: Date?)
@@ -29,8 +32,12 @@ public enum GuardState: Equatable {
 ///  - offline freezes (when `block_when_offline`) but never closes: no countdown runs offline, a
 ///    running one is suspended and restarts from full grace once the network is back;
 ///  - a route leak is an ordinary freeze with countdown; "pause" is only the user's button;
-///  - sleep: countdowns are cancelled in `willSleep`; `didWake` restarts them from full grace and
-///    requests a fresh check.
+///  - countdowns run on `Clock.uptime` (monotonic, paused during sleep), so wall-clock jumps can
+///    neither shorten nor lengthen them; sleep: countdowns are cancelled in `willSleep`, `didWake`
+///    restarts them from full grace and requests a fresh check;
+///  - an app whose processes cannot be stopped (freeze failed) is reported (`freezeFailedApps`,
+///    reason `.freezeFailed`, a `leak` event "freezeFailed") and still closed at the deadline:
+///    closing targets the app's currently running processes, not only the ones stopped earlier.
 ///
 /// Threading: every entry point runs under one lock. The Freezer is called with that lock held;
 /// this is safe because the Freezer has no callbacks and never calls back into the Guard.
@@ -43,12 +50,17 @@ public final class Guard {
         var phase: Phase = .ok
         var since = Date.distantPast
         var reason: Reason = .unconfirmed
-        var deadline: Date?
+        /// Close deadline on the monotonic `Clock.uptime` base.
+        var deadline: TimeInterval?
         /// `keep_frozen` timeout reached: stays frozen without a new countdown until a pass.
         var timedOut = false
+        /// Frozen only as a precaution by `networkChanged()` while the network was offline.
+        var precautionary = false
         var closedAt: Date?
         /// Processes stopped on behalf of this app (roots and descendants).
         var procs: [Int32: ProcInfo] = [:]
+        /// Should be frozen, but matching processes are running unstopped.
+        var freezeFailed = false
         /// A `frozen` event was logged for this freeze episode (only once processes were stopped).
         var loggedFrozen = false
     }
@@ -63,6 +75,8 @@ public final class Guard {
     /// Pids whose resume was requested but not confirmed by the Freezer; retried every tick.
     private var pending: Set<Int32> = []
     private var pendingInfo: [Int32: ProcInfo] = [:]
+    /// Processes handed to `runClose` (pid -> start time): not "running unstopped" while they die.
+    private var closing: [Int32: Date] = [:]
     private var pausedUntil: Date?
     private var pauseTimer: Cancellable?
     private var pauseGen = 0
@@ -74,6 +88,7 @@ public final class Guard {
     private var lastLeaks: Set<String> = []
     private var publishedState: GuardState = .ok
     private var publishedFrozen: Set<String> = []
+    private var publishedFailed: Set<String> = []
     private var effects: [() -> Void] = []
 
     private var _onChange: ((GuardState) -> Void)?
@@ -82,7 +97,7 @@ public final class Guard {
     private var _callbackQueue: DispatchQueue?
     private var _runClose: ([ProcInfo], TimeInterval) -> Void
 
-    /// Fired after every change of `state` or `frozenApps`.
+    /// Fired after every change of `state`, `frozenApps` or `freezeFailedApps`.
     public var onChange: ((GuardState) -> Void)? {
         get { locked { _onChange } } set { locked { _onChange = newValue } }
     }
@@ -112,8 +127,10 @@ public final class Guard {
     // MARK: Read-only state
 
     public var state: GuardState { locked { computeState() } }
-    /// Apps currently frozen (decided per app).
+    /// Apps currently frozen (decided per app) whose processes are actually stopped.
     public var frozenApps: Set<String> { locked { frozenSet() } }
+    /// Apps that should be frozen but whose running processes could not be stopped.
+    public var freezeFailedApps: Set<String> { locked { failedSet() } }
     /// Apps released by `on_timeout: resume`; protected again after the next passing check.
     public var releasedApps: Set<String> { locked { Set(apps.filter { $0.value.phase == .released }.keys) } }
     /// Pids still stopped although a resume was requested (retried on every tick).
@@ -132,15 +149,15 @@ public final class Guard {
     public func pause(for d: TimeInterval) {
         guard d.isFinite, d > 0 else { return }
         perform {
-            let until = clock.now.addingTimeInterval(min(d, 86_400))
-            pausedUntil = until
+            let len = min(d, 86_400)
+            pausedUntil = clock.now.addingTimeInterval(len)
             for id in Array(apps.keys) { release(id) }
             apps = [:]
             record(.paused, nil, "pause")
             pauseTimer?.cancel()
             pauseGen += 1
             let gen = pauseGen
-            pauseTimer = clock.schedule(after: until.timeIntervalSince(clock.now)) { [weak self] in
+            pauseTimer = clock.schedule(after: len) { [weak self] in
                 self?.perform { self?.pauseFired(gen) }
             }
             reconcileProcesses()
@@ -164,7 +181,7 @@ public final class Guard {
         guard by.isFinite, by > 0 else { return }
         perform {
             for id in ids() where apps[id]?.phase == .frozen {
-                if let d = apps[id]?.deadline { apps[id]?.deadline = d.addingTimeInterval(by) }
+                if let d = apps[id]?.deadline { apps[id]?.deadline = d + by }
             }
         }
     }
@@ -179,20 +196,26 @@ public final class Guard {
     }
 
     /// System network change (interface / route / proxy): instant freeze of every protected app,
-    /// pending a fresh check. Ignored (only logged) while paused.
+    /// pending a fresh check. With the last observation offline the freeze is precautionary: no
+    /// countdown (nothing closes offline), and with `block_when_offline` off an offline check
+    /// result releases it again. Ignored (only logged) while paused.
     public func networkChanged() {
         perform {
             record(.networkChanged, nil, "networkChanged")
             requestCheck()
             guard pausedUntil == nil else { return }
-            let now = clock.now
+            let off = lastObservation.map { !$0.online } ?? false
             for id in ids() {
                 let p = apps[id]?.phase ?? .ok
-                if p == .ok || p == .released {
-                    var a = AppStatus()
-                    startFreeze(&a, id, .networkChanged, deadline: now.addingTimeInterval(grace(id)), now)
-                    apps[id] = a
+                guard p == .ok || p == .released else { continue }
+                var a = AppStatus()
+                if off {
+                    startFreeze(&a, .offline, deadline: nil)
+                    a.precautionary = true
+                } else {
+                    startFreeze(&a, .networkChanged, deadline: clock.uptime + grace(id))
                 }
+                apps[id] = a
             }
             reconcileProcesses()
         }
@@ -203,10 +226,10 @@ public final class Guard {
     public func didWake() {
         perform {
             sleeping = false
-            let now = clock.now
-            if let u = pausedUntil, now >= u { endPause() }
+            if let u = pausedUntil, clock.now >= u { endPause() }
+            let up = clock.uptime
             for id in ids() where apps[id]?.phase == .frozen && apps[id]?.deadline != nil {
-                apps[id]?.deadline = now.addingTimeInterval(grace(id))
+                apps[id]?.deadline = up + grace(id)
             }
             requestCheck()
         }
@@ -231,44 +254,49 @@ public final class Guard {
         lastConfirmedIP = Guard.confirmedIP(o, minAgree: config.minAgree)
         logLeakEdges(o)
         guard pausedUntil == nil else { reconcileProcesses(); return }
-        let now = clock.now
         for id in ids() {
             let v = evaluate(o, allow: effectiveAllow(for: id, in: config), minAgree: config.minAgree,
                              dnsCheck: config.dnsCheck)
-            transition(id, v, now)
+            transition(id, v)
         }
         reconcileProcesses()
     }
 
-    private func transition(_ id: String, _ v: Verdict, _ now: Date) {
+    private func transition(_ id: String, _ v: Verdict) {
         var a = apps[id] ?? AppStatus()
         switch (v, a.phase) {
         case (.ok, .frozen):
             if a.loggedFrozen { record(.resumed, id, "checkPassed") }
-            release(id); a = AppStatus()
+            release(id)
             apps[id] = nil
             return
         case (.ok, _):
             a = AppStatus()
         case (.offline, .ok):
-            if config.blockWhenOffline { startFreeze(&a, id, .offline, deadline: nil, now) }
+            if config.blockWhenOffline { startFreeze(&a, .offline, deadline: nil) }
         case (.offline, .frozen):
+            if a.precautionary && !config.blockWhenOffline {
+                release(id)                                // offline confirmed, user lets apps run
+                apps[id] = nil
+                return
+            }
             a.reason = .offline; a.deadline = nil          // countdown suspended, never closes offline
         case (.freeze(let r), .ok):
-            startFreeze(&a, id, r, deadline: now.addingTimeInterval(grace(id)), now)
+            startFreeze(&a, r, deadline: clock.uptime + grace(id))
         case (.freeze(let r), .frozen):
-            if a.deadline == nil && !a.timedOut { a.deadline = now.addingTimeInterval(grace(id)) }
+            if a.deadline == nil && !a.timedOut { a.deadline = clock.uptime + grace(id) }
             a.reason = r
+            a.precautionary = false
         case (.offline, _), (.freeze, _):
             break                                          // closed / released: wait for a pass
         }
         apps[id] = a
     }
 
-    private func startFreeze(_ a: inout AppStatus, _ id: String, _ r: Reason, deadline: Date?, _ now: Date) {
+    private func startFreeze(_ a: inout AppStatus, _ r: Reason, deadline: TimeInterval?) {
         let procs = a.procs
         a = AppStatus()
-        a.phase = .frozen; a.since = now; a.reason = r; a.deadline = deadline; a.procs = procs
+        a.phase = .frozen; a.since = clock.now; a.reason = r; a.deadline = deadline; a.procs = procs
     }
 
     /// Moves the app's stopped processes to the resume queue (lock held; resumed in reconcile).
@@ -297,13 +325,49 @@ public final class Guard {
             pending = left
             pendingInfo = pendingInfo.filter { left.contains($0.key) }
         }
-        // Catch-up: freeze newly started processes (relaunch, helpers) of frozen/closed apps.
+        // Catch-up: freeze newly started processes (relaunch, helpers) of frozen/closed apps,
+        // then check that nothing of them is left running unstopped.
         for id in engaged {
             let ms = AppCatalog.matchers(for: id, in: config)
             guard !ms.isEmpty else { continue }
             let got = freezer.freezeNewlyStarted(matching: ms)
             if !got.isEmpty { attribute(got, defaultApp: id) }
+            let stopped = freezer.frozenPIDs
+            let live = freezer.matchingProcesses(ms)
+            let loose = live.filter { p in
+                !stopped.contains(p.pid) && closing[p.pid].map { !Freezer.same(p.startTime, $0) } ?? true
+            }
+            updateFreezeFailed(id, running: !loose.isEmpty)
         }
+        pruneClosing()
+    }
+
+    /// Forgets closing entries whose process is gone (or whose pid now belongs to another process).
+    private func pruneClosing() {
+        guard !closing.isEmpty else { return }
+        var ms: [AppMatcher] = []
+        for id in ids() { ms += AppCatalog.matchers(for: id, in: config) }
+        let alive = Dictionary(freezer.matchingProcesses(ms).map { ($0.pid, $0.startTime) }, uniquingKeysWith: { a, _ in a })
+        closing = closing.filter { pid, start in alive[pid].map { Freezer.same($0, start) } ?? false }
+    }
+
+    private func updateFreezeFailed(_ id: String, running: Bool) {
+        guard var a = apps[id] else { return }
+        if running {
+            if a.phase == .closed { reopen(&a, id) }           // relaunched but cannot be stopped
+            if !a.freezeFailed { record(.leak, id, "freezeFailed") }
+            a.freezeFailed = true
+        } else {
+            a.freezeFailed = false
+        }
+        apps[id] = a
+    }
+
+    /// A closed app with processes again (relaunch): frozen anew with a fresh countdown
+    /// (none while offline).
+    private func reopen(_ a: inout AppStatus, _ id: String) {
+        let off = lastObservation.map { !$0.online } ?? false
+        startFreeze(&a, off ? .offline : a.reason, deadline: off ? nil : clock.uptime + grace(id))
     }
 
     /// A pid waiting for resume that belongs to an app which is frozen again (it matches the app,
@@ -326,15 +390,12 @@ public final class Guard {
     /// (over-freezing a stray child is the safe side). A closed app that gets processes again
     /// (relaunch) is frozen anew with a fresh countdown.
     private func attribute(_ got: [ProcInfo], defaultApp: String) {
-        let now = clock.now
         var touched: [String] = []
         for p in got.sorted(by: { ($0.startTime, $0.pid) < ($1.startTime, $1.pid) }) {
             let owner = ids().first { apps[$0]?.phase == .frozen && apps[$0]?.procs[p.ppid] != nil } ?? defaultApp
             if apps[owner]?.phase == .closed {
                 var a = apps[owner]!
-                let off = lastObservation.map { !$0.online } ?? false
-                startFreeze(&a, owner, off ? .offline : a.reason,
-                            deadline: off ? nil : now.addingTimeInterval(grace(owner)), now)
+                reopen(&a, owner)
                 apps[owner] = a
             }
             apps[owner, default: AppStatus()].procs[p.pid] = p
@@ -347,9 +408,9 @@ public final class Guard {
     }
 
     private func handleTimeouts() {
-        let now = clock.now
+        let now = clock.now, up = clock.uptime
         for id in ids() {
-            guard let a = apps[id], a.phase == .frozen, let d = a.deadline, d <= now else { continue }
+            guard let a = apps[id], a.phase == .frozen, let d = a.deadline, d <= up else { continue }
             switch config.onTimeout {
             case .close:
                 closeApp(id, now, "timeout")
@@ -365,14 +426,22 @@ public final class Guard {
         reconcileProcesses()
     }
 
+    /// Closes the processes stopped for this app plus whatever of it is running right now (a
+    /// failed freeze must not leave it running). `Freezer.close` re-checks identity and the
+    /// never-freeze list.
     private func closeApp(_ id: String, _ now: Date, _ detail: String) {
         guard var a = apps[id] else { return }
-        let procs = a.procs.values.sorted { $0.pid < $1.pid }
+        var targets = a.procs
+        for p in freezer.matchingProcesses(AppCatalog.matchers(for: id, in: config)) where targets[p.pid] == nil {
+            targets[p.pid] = p
+        }
+        let procs = targets.values.sorted { $0.pid < $1.pid }
         a.phase = .closed; a.closedAt = now; a.deadline = nil; a.timedOut = false
-        a.procs = [:]; a.loggedFrozen = false
+        a.procs = [:]; a.loggedFrozen = false; a.freezeFailed = false; a.precautionary = false
         apps[id] = a
         guard !procs.isEmpty else { return }
         record(.closed, id, detail)
+        for p in procs { closing[p.pid] = p.startTime }
         let run = _runClose, gentle = config.closeTimeout
         effects.append { run(procs, gentle) }
     }
@@ -404,7 +473,7 @@ public final class Guard {
         guard !sleeping, pausedUntil == nil,
               let next = apps.values.filter({ $0.phase == .frozen }).compactMap({ $0.deadline }).min() else { return }
         let gen = timerGen
-        deadlineTimer = clock.schedule(after: next.timeIntervalSince(clock.now)) { [weak self] in
+        deadlineTimer = clock.schedule(after: next - clock.uptime) { [weak self] in
             self?.perform { self?.deadlineFired(gen) }
         }
     }
@@ -413,16 +482,24 @@ public final class Guard {
 
     private func ids() -> [String] { AppCatalog.appIDs(in: config) }
     private func grace(_ id: String) -> TimeInterval { config.appGrace[id] ?? config.grace }
-    private func frozenSet() -> Set<String> { Set(apps.filter { $0.value.phase == .frozen }.keys) }
+    private func frozenSet() -> Set<String> {
+        Set(apps.filter { $0.value.phase == .frozen && !$0.value.freezeFailed }.keys)
+    }
+    private func failedSet() -> Set<String> {
+        Set(apps.filter { $0.value.phase == .frozen && $0.value.freezeFailed }.keys)
+    }
 
     private func computeState() -> GuardState {
         if let u = pausedUntil { return .paused(until: u) }
-        let order = ids() + apps.keys.filter { !ids().contains($0) }.sorted()
+        let all = ids()
+        let order = all + apps.keys.filter { !all.contains($0) }.sorted()
         let fr = order.compactMap { apps[$0] }.filter { $0.phase == .frozen }
         if let first = fr.min(by: { $0.since < $1.since }) {
             let timed = fr.filter { $0.deadline != nil }
             let lead = timed.min(by: { $0.deadline! < $1.deadline! }) ?? first
-            return .frozen(since: first.since, reason: lead.reason, deadline: lead.deadline)
+            let reason: Reason = fr.contains { $0.freezeFailed } ? .freezeFailed : lead.reason
+            let shown = lead.deadline.map { clock.now.addingTimeInterval($0 - clock.uptime) }
+            return .frozen(since: first.since, reason: reason, deadline: shown)
         }
         if let c = apps.values.filter({ $0.phase == .closed }).compactMap({ $0.closedAt }).max() { return .closed(c) }
         return .ok
@@ -469,9 +546,9 @@ public final class Guard {
         lock.lock()
         body()
         rearmDeadlineTimer()
-        let s = computeState(), f = frozenSet()
-        if s != publishedState || f != publishedFrozen {
-            publishedState = s; publishedFrozen = f
+        let s = computeState(), f = frozenSet(), x = failedSet()
+        if s != publishedState || f != publishedFrozen || x != publishedFailed {
+            publishedState = s; publishedFrozen = f; publishedFailed = x
             let cb = _onChange
             effects.append { cb?(s) }
         }

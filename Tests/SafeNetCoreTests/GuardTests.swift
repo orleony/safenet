@@ -82,10 +82,19 @@ private final class Rig {
     var allowed: [String] = []
     var closedBatches: [[Int32]] = []
 
-    init(_ config: Config = baseConfig(), procs: [ProcInfo] = [gproc(100, "Claude"), gproc(200, "Telegram")]) {
+    init(_ config: Config = baseConfig(), procs: [ProcInfo] = [gproc(100, "Claude"), gproc(200, "Telegram")],
+         unwritableJournal: Bool = false) {
         table = GTable(procs)
         dir = FileManager.default.temporaryDirectory.appendingPathComponent("safenet-guard-\(UUID().uuidString)")
-        freezer = Freezer(table: table, signaler: sig, journal: dir.appendingPathComponent("frozen.json"),
+        var journal = dir.appendingPathComponent("frozen.json")
+        if unwritableJournal {
+            // The journal's "directory" is a regular file: createDirectory fails -> no SIGSTOP.
+            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            let blocker = dir.appendingPathComponent("blocker")
+            FileManager.default.createFile(atPath: blocker.path, contents: Data("x".utf8))
+            journal = blocker.appendingPathComponent("frozen.json")
+        }
+        freezer = Freezer(table: table, signaler: sig, journal: journal,
                           selfPID: fakeSelf, myUID: me, pollInterval: 0.01)
         log = EventLog(url: dir.appendingPathComponent("events.jsonl"))
         guardian = Guard(config: config, freezer: freezer, clock: clock, log: log)
@@ -561,6 +570,124 @@ func registerGuardTests() {
         expect(AppCatalog.matchers(for: "My Tool", in: c).contains { $0.matches(gproc(1, "MyTool")) })
         expect(!AppCatalog.matchers(for: "telegram", in: c).isEmpty)
         expect(AppCatalog.presets.contains { $0.group == AppCatalog.browsersForAI })
+    }
+
+    test("testFreezeFailureIsReportedAndStillClosedAtDeadline") {
+        let r = Rig(unwritableJournal: true); let g = r.guardian
+        g.apply(bad)
+        expectEqual(r.sig.pids(SIGSTOP), [], "journal unwritable -> Freezer refuses to stop")
+        expectEqual(reason(g.state), .freezeFailed, "not shown as plain frozen")
+        expectEqual(g.frozenApps, [])
+        expectEqual(g.freezeFailedApps, ["claude", "telegram"])
+        expectEqual(Set(r.events(.leak).filter { $0.detail == "freezeFailed" }.compactMap { $0.app }),
+                    ["claude", "telegram"])
+        g.apply(bad)
+        expectEqual(r.events(.leak).count, 2, "logged once per episode")
+        expectEqual(deadline(g.state), .some(r.now.addingTimeInterval(20)), "countdown still runs")
+        r.clock.advance(by: 19)
+        expectEqual(r.sig.pids(SIGTERM), [])
+        r.clock.advance(by: 2)
+        expectEqual(Set(r.sig.pids(SIGTERM)), [100, 200], "running processes closed at the deadline")
+        for pid: Int32 in [100, 200] {
+            let s = r.sig.sent.filter { $0.pid == pid }.map { $0.sig }
+            expect(s.firstIndex(of: SIGCONT).map { $0 < s.firstIndex(of: SIGTERM)! } ?? false, "SIGCONT before SIGTERM: \(s)")
+        }
+        expectEqual(Set(r.events(.closed).compactMap { $0.app }), ["claude", "telegram"])
+        if case .closed = g.state {} else { expect(false, "\(g.state)") }
+        expectEqual(g.freezeFailedApps, [])
+    }
+
+    test("testCloseNowClosesRunningProcessesAfterFailedFreeze") {
+        let r = Rig(unwritableJournal: true); let g = r.guardian
+        g.apply(bad)
+        g.closeNow()
+        expectEqual(Set(r.sig.pids(SIGTERM)), [100, 200])
+        expectEqual(r.events(.closed).map { $0.detail }, ["closeNow", "closeNow"])
+    }
+
+    test("testRelaunchThatCannotBeFrozenReopensCountdown") {
+        let r = Rig(unwritableJournal: true); let g = r.guardian
+        g.apply(bad)
+        r.clock.advance(by: 21)                       // both closed
+        r.table.procs = [gproc(500, "Claude", start: 5000)]
+        g.tick()
+        expectEqual(g.freezeFailedApps, ["claude"])
+        expectEqual(deadline(g.state), .some(r.now.addingTimeInterval(20)))
+        r.clock.advance(by: 21)
+        expectEqual(r.sig.count(SIGTERM, 500), 1)
+    }
+
+    test("testClaudeCodePresetDoesNotSelectDesktopApp") {
+        var c = Config.default
+        c.apps = ["claude-code"]
+        let desktop = gproc(100, "Claude")
+        let helper = ProcInfo(pid: 101, ppid: 100, name: "Claude Helper",
+                              path: "/Applications/Claude.app/Contents/Frameworks/Claude Helper.app/Contents/MacOS/Claude Helper",
+                              args: "", startTime: Date(timeIntervalSince1970: 1000), uid: me)
+        let npmCLI = ProcInfo(pid: 300, ppid: 1, name: "node", path: "/usr/local/bin/node",
+                              args: "node /usr/local/lib/node_modules/@anthropic-ai/claude-code/cli.js",
+                              startTime: Date(timeIntervalSince1970: 1000), uid: me)
+        let nativeCLI = ProcInfo(pid: 301, ppid: 1, name: "claude",
+                                 path: "/Users/u/.local/share/claude/versions/1.0.0", args: "claude",
+                                 startTime: Date(timeIntervalSince1970: 1000), uid: me)
+        let all = [desktop, helper, npmCLI, nativeCLI]
+        let code = AppCatalog.matchers(for: "claude-code", in: c)
+        expectEqual(Set(code.flatMap { $0.select(from: all) }.map { $0.pid }), [300, 301])
+        let desk = AppCatalog.matchers(for: "claude", in: c)
+        expectEqual(Set(desk.flatMap { $0.select(from: all) }.map { $0.pid }), [100, 101])
+    }
+
+    test("testSafariPresetUnsupportedAndNeverProtected") {
+        var c = Config.default
+        c.apps = ["safari", "claude"]
+        let safari = AppCatalog.preset("safari")
+        expect(safari?.unsupported?.isEmpty == false, "unsupported with a reason")
+        expect(!AppCatalog.selectablePresets.contains { $0.id == "safari" })
+        expectEqual(AppCatalog.appIDs(in: c), ["claude"])
+        expectEqual(AppCatalog.matchers(for: "safari", in: c), [])
+        c.apps = ["safari"]
+        let r = Rig(c); let g = r.guardian
+        g.apply(bad)
+        expectEqual(g.state, .ok, "an unsupported app is not reported as protected")
+    }
+
+    test("testWallClockJumpDoesNotShortenOrExtendGrace") {
+        let r = Rig(); let g = r.guardian
+        g.apply(bad)
+        r.clock.jumpWallClock(by: 3600)               // NTP step forward
+        g.apply(bad)                                  // re-arms the timer
+        expectEqual(deadline(g.state), .some(r.now.addingTimeInterval(20)), "remaining time unchanged")
+        r.clock.advance(by: 19)
+        expectEqual(r.sig.pids(SIGTERM), [], "no early close after a forward jump")
+        r.clock.advance(by: 2)
+        expectEqual(Set(r.sig.pids(SIGTERM)), [100, 200])
+
+        let r2 = Rig(); let g2 = r2.guardian
+        g2.apply(bad)
+        r2.clock.jumpWallClock(by: -3600)             // backward
+        g2.apply(bad)
+        r2.clock.advance(by: 21)
+        expectEqual(Set(r2.sig.pids(SIGTERM)), [100, 200], "a backward jump does not extend grace")
+    }
+
+    test("testNetworkChangedWhileOfflineStartsNoCountdown") {
+        var c = baseConfig(); c.blockWhenOffline = false
+        let r = Rig(c); let g = r.guardian
+        g.apply(offline)
+        expectEqual(g.state, .ok)
+        g.networkChanged()
+        expect(isFrozen(g.state))
+        expectEqual(reason(g.state), .offline)
+        expectEqual(deadline(g.state), .some(nil))
+        expectEqual(r.clock.pendingCount, 0)
+        r.clock.advance(by: 100)
+        expectEqual(r.sig.pids(SIGTERM), [])
+        g.apply(offline)                              // offline confirmed, block off: released again
+        expectEqual(g.state, .ok)
+        expectEqual(r.freezer.frozenPIDs, [])
+        g.networkChanged()
+        g.apply(bad)                                  // back online and wrong: real countdown
+        expectEqual(deadline(g.state), .some(r.now.addingTimeInterval(20)))
     }
 
     test("testFakeClockFiresInOrderAndCancels") {

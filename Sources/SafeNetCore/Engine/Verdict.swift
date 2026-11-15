@@ -4,6 +4,9 @@ public enum Reason: Equatable {
     case ipNotAllowed, countryNotAllowed, unconfirmed, ipv6Leak, dnsLeak, routeLeak, networkChanged
     /// Produced only by `Guard` (frozen because there is no network; never closes).
     case offline
+    /// Produced only by `Guard`: the app should be frozen but its processes could not be stopped
+    /// (journal not writable, SIGSTOP failed). It is running unrestricted; the countdown still runs.
+    case freezeFailed
 }
 
 public enum Verdict: Equatable {

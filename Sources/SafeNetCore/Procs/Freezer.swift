@@ -144,6 +144,19 @@ public final class Freezer {
         return freeze(candidates)
     }
 
+    /// Currently running, signalable (not protected) processes of these apps (matching processes
+    /// plus same-bundle helpers; descendants are added by `freeze` / `close`). Lets the caller see
+    /// what is running although it should be frozen, and close it even when freezing failed.
+    public func matchingProcesses(_ matchers: [AppMatcher]) -> [ProcInfo] {
+        guard !matchers.isEmpty else { return [] }
+        let all = table.list()
+        var seen = Set<Int32>(), out: [ProcInfo] = []
+        for m in matchers {
+            for p in m.select(from: all) where !protected(p) && seen.insert(p.pid).inserted { out.append(p) }
+        }
+        return out.sorted { $0.pid < $1.pid }
+    }
+
     /// Sends SIGCONT to every journaled process whose identity (pid + start time + uid) still
     /// matches. An entry leaves the journal only when SIGCONT succeeded or the process is
     /// verifiably gone / replaced; everything else stays journaled for the next retry

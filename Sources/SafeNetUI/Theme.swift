@@ -1,5 +1,6 @@
 import SwiftUI
 import SafeNetCore
+import Combine
 
 /// Corner radii and other fixed design constants.
 public enum Metrics {
@@ -16,11 +17,31 @@ public final class Theme: ObservableObject {
     private var config: Config
     private var systemScheme: ColorScheme
 
-    public init(config: Config = .default, systemScheme: ColorScheme = .dark) {
+    private var appearanceSub: AnyCancellable?
+
+    /// Fixed system scheme (tests, previews).
+    public init(config: Config = .default, systemScheme: ColorScheme) {
         self.config = config; self.systemScheme = systemScheme
         palette = SafeNetUI.palette(theme: config.theme, system: systemScheme, accent: AccentName(configValue: config.accent))
         spacing = scaledSpacing(config.density)
         fontStyle = config.fontStyle
+    }
+
+    /// Live theme: starts from the real system scheme and follows later changes (no restart needed).
+    public convenience init(config: Config = .default, appearance: SystemAppearance) {
+        self.init(config: config, systemScheme: appearance.scheme)
+        appearanceSub = appearance.$scheme.dropFirst().sink { [weak self] in self?.update(systemScheme: $0) }
+    }
+
+    /// Scheme to force on the app, nil for "as system". Apply `.preferredColorScheme(theme.forcedScheme)`
+    /// on the outermost scene/root view of every window. This is safe because the system scheme comes
+    /// from SystemAppearance, not from the SwiftUI environment.
+    public var forcedScheme: ColorScheme? {
+        switch config.theme {
+        case .light: return .light
+        case .dark: return .dark
+        case .system: return nil
+        }
     }
 
     public func update(config: Config) { self.config = config; resolve() }
@@ -41,20 +62,4 @@ public final class Theme: ObservableObject {
         case .mono: return .system(size: size, weight: weight, design: .monospaced)
         }
     }
-}
-
-/// Publishes the environment colour scheme into the Theme so "as system" re-resolves live on appearance change.
-private struct ThemeSchemeSync: ViewModifier {
-    @ObservedObject var theme: Theme
-    @Environment(\.colorScheme) private var scheme
-    func body(content: Content) -> some View {
-        content
-            .onAppear { theme.update(systemScheme: scheme) }
-            .onChange(of: scheme) { theme.update(systemScheme: $0) }
-    }
-}
-
-public extension View {
-    /// Attach at the root of every window/popover so the Theme follows macOS appearance without a restart.
-    func syncingTheme(_ theme: Theme) -> some View { modifier(ThemeSchemeSync(theme: theme)) }
 }

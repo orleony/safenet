@@ -95,3 +95,48 @@ func registerThemeTests() {
         expectEqual(t.fontStyle, .system)
     }
 }
+
+import Combine
+
+func registerSystemAppearanceTests() {
+    test("testSystemAppearanceReadsStyle") {
+        let none = PassthroughSubject<Void, Never>().eraseToAnyPublisher()
+        expectEqual(SystemAppearance(provider: { "Dark" }, changes: none).scheme, .dark)
+        expectEqual(SystemAppearance(provider: { nil }, changes: none).scheme, .light)
+        expectEqual(SystemAppearance(provider: { "Light" }, changes: none).scheme, .light)
+        expectEqual(SystemAppearance(provider: { "weird" }, changes: none).scheme, .light)
+    }
+    test("testSystemAppearanceNotificationRereads") {
+        var style: String? = nil
+        let subj = PassthroughSubject<Void, Never>()
+        let a = SystemAppearance(provider: { style }, changes: subj.eraseToAnyPublisher())
+        expectEqual(a.scheme, .light)
+        style = "Dark"
+        subj.send(())
+        let exp = Date().addingTimeInterval(2)
+        while a.scheme != .dark && Date() < exp { RunLoop.main.run(until: Date().addingTimeInterval(0.01)) }
+        expectEqual(a.scheme, .dark)
+    }
+    test("testThemeFollowsSystemAppearanceAndForcedIgnores") {
+        var style: String? = "Dark"
+        let a = SystemAppearance(provider: { style }, changes: Empty().eraseToAnyPublisher())
+        var cfg = Config.default
+        cfg.theme = .system
+        let sys = Theme(config: cfg, appearance: a)
+        cfg.theme = .light
+        let forced = Theme(config: cfg, appearance: a)
+        expectEqual(sys.palette.background, RGB(hex: "#1a1c25")!)
+        expectEqual(forced.palette.background, RGB(hex: "#fbfbfd")!)
+        style = nil; a.refresh()
+        expectEqual(sys.palette.background, RGB(hex: "#fbfbfd")!)
+        expectEqual(forced.palette.background, RGB(hex: "#fbfbfd")!)
+        style = "Dark"; a.refresh()
+        expectEqual(sys.palette.background, RGB(hex: "#1a1c25")!)
+        expectEqual(forced.palette.background, RGB(hex: "#fbfbfd")!)
+        expectEqual(sys.forcedScheme, nil)
+        expectEqual(forced.forcedScheme, .light)
+        cfg.theme = .dark
+        forced.update(config: cfg)
+        expectEqual(forced.forcedScheme, .dark)
+    }
+}

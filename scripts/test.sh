@@ -22,6 +22,7 @@ swiftc -target "$TARGET" -Onone -enable-testing -parse-as-library -module-name S
   $(find Sources/SafeNetUI -name '*.swift')
 
 STATUS=0
+TOTAL=0
 for dir in Tests/*Tests; do
   [ -d "$dir" ] || continue
   name="$(basename "$dir")"
@@ -33,6 +34,9 @@ for dir in Tests/*Tests; do
     -lSafeNetUI -lSafeNetCore -o "$OUT/$name" \
     Tests/TestKit/TestKit.swift "$dir"/*.swift "$main"
   echo "==> running $name"
-  if [ -n "$FILTER" ]; then "$OUT/$name" "$FILTER" || STATUS=1; else "$OUT/$name" || STATUS=1; fi
+  if [ -n "$FILTER" ]; then "$OUT/$name" "$FILTER" | tee "$OUT/$name.log" || STATUS=1; else "$OUT/$name" | tee "$OUT/$name.log" || STATUS=1; fi
+  [ "${PIPESTATUS[0]}" = 0 ] || STATUS=1
+  TOTAL=$((TOTAL + $(sed -n 's/^Executed \([0-9]*\) tests.*/\1/p' "$OUT/$name.log")))
 done
+[ "$TOTAL" -gt 0 ] || { echo "No tests executed"; STATUS=1; }
 exit $STATUS

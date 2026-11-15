@@ -53,23 +53,25 @@ public final class ConfigStore {
         lock.lock(); lastData = data; lock.unlock()   // do not echo our own save to the watcher
     }
 
-    public func watch(queue: DispatchQueue = .main, onChange: @escaping (Result<Config, Error>) -> Void) {
+    /// `pollInterval`: safety-net poll in seconds; nil disables polling (event sources only).
+    public func watch(queue: DispatchQueue = .main, pollInterval: TimeInterval? = 1,
+                      onChange: @escaping (Result<Config, Error>) -> Void) {
         stopWatching()
         lock.lock()
         callback = onChange
         callbackQueue = queue
         lastData = try? Data(contentsOf: url)
         watching = true
-        lock.unlock()
-        work.async { [weak self] in
-            guard let self = self else { return }
-            self.openSources()
-            let t = DispatchSource.makeTimerSource(queue: self.work)
-            t.schedule(deadline: .now() + 1, repeating: 1)
+        fileSource = makeSource(path: url.path, mask: [.write, .extend, .delete, .rename, .attrib], isFile: true)
+        dirSource = makeSource(path: url.deletingLastPathComponent().path, mask: [.write, .rename, .delete], isFile: false)
+        if let interval = pollInterval {
+            let t = DispatchSource.makeTimerSource(queue: work)
+            t.schedule(deadline: .now() + interval, repeating: interval)
             t.setEventHandler { [weak self] in self?.check() }
-            self.lock.lock(); self.timer = t; self.lock.unlock()
+            timer = t
             t.resume()
         }
+        lock.unlock()
     }
 
     public func stopWatching() {
@@ -82,23 +84,29 @@ public final class ConfigStore {
         f?.cancel(); d?.cancel(); t?.cancel()
     }
 
-    // Runs on `work`.
-    private func openSources() {
-        lock.lock(); let on = watching; lock.unlock()
-        guard on else { return }
-        fileSource?.cancel(); dirSource?.cancel()
-        fileSource = makeSource(path: url.path, mask: [.write, .extend, .delete, .rename, .attrib])
-        dirSource = makeSource(path: url.deletingLastPathComponent().path, mask: [.write, .rename, .delete])
+    /// Re-attaches the file source (after replace/delete, or when the file appeared later).
+    private func reattachFile(force: Bool) {
+        lock.lock()
+        guard watching, force || fileSource == nil else { lock.unlock(); return }
+        let old = fileSource
+        fileSource = makeSource(path: url.path, mask: [.write, .extend, .delete, .rename, .attrib], isFile: true)
+        lock.unlock()
+        old?.cancel()
     }
 
-    private func makeSource(path: String, mask: DispatchSource.FileSystemEvent) -> DispatchSourceFileSystemObject? {
+    // Caller holds no requirement on the lock; only reads `url` and creates the source.
+    private func makeSource(path: String, mask: DispatchSource.FileSystemEvent, isFile: Bool) -> DispatchSourceFileSystemObject? {
         let fd = open(path, O_EVTONLY)
         guard fd >= 0 else { return nil }
         let s = DispatchSource.makeFileSystemObjectSource(fileDescriptor: fd, eventMask: mask, queue: work)
-        s.setEventHandler { [weak self] in
-            guard let self = self else { return }
+        s.setEventHandler { [weak self, weak s] in
+            guard let self = self, let s = s else { return }
             let ev = s.data
-            if ev.contains(.delete) || ev.contains(.rename) { self.openSources() }  // file replaced: re-attach
+            if isFile {
+                if ev.contains(.delete) || ev.contains(.rename) { self.reattachFile(force: true) }
+            } else {
+                self.reattachFile(force: false)
+            }
             self.work.asyncAfter(deadline: .now() + 0.1) { [weak self] in self?.check() } // debounce
         }
         s.setCancelHandler { close(fd) }

@@ -168,13 +168,13 @@ public struct Config: Equatable {
     // MARK: Helpers
 
     private static func fmt(_ t: TimeInterval) -> YAMLValue {
-        .string(t == t.rounded() ? "\(Int64(t))s" : "\(t)s")
+        .string(t == t.rounded() && abs(t) < 1e15 ? "\(Int64(t))s" : "\(t)s")
     }
 
     private static func str(_ v: YAMLValue?, _ key: String) throws -> String {
         switch v {
         case .string(let s)?: return s
-        case .number(let d)?: return d == d.rounded() ? String(Int64(d)) : String(d)
+        case .number(let d)? where abs(d) < 1e15: return d == d.rounded() ? String(Int64(d)) : String(d)
         case .bool(let b)?: return b ? "true" : "false"
         default: throw ConfigError("'\(key)' must be a string")
         }
@@ -192,14 +192,15 @@ public struct Config: Equatable {
 
     /// Accepts 20, 20s, 1.5s, 5m, 2h.
     private static func duration(_ v: YAMLValue, _ key: String) throws -> TimeInterval {
-        if case .number(let d) = v { return d }
+        let limit = 1e9   // ~31 years; rejects absurd values that could overflow later conversions
+        if case .number(let d) = v, abs(d) <= limit { return d }
         if case .string(let s) = v {
             var t = s.trimmingCharacters(in: .whitespaces), mult = 1.0
             if let last = t.last, "smh".contains(last) {
                 mult = last == "s" ? 1 : last == "m" ? 60 : 3600
                 t.removeLast()
             }
-            if let d = Double(t), d.isFinite { return d * mult }
+            if let d = Double(t), d.isFinite, abs(d * mult) <= limit { return d * mult }
         }
         throw ConfigError("'\(key)' must be a duration like 20s, 5m or a number of seconds")
     }

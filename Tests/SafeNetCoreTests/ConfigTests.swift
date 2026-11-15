@@ -80,7 +80,7 @@ func registerConfigTests() {
     test("testInvalidValuesThrow") {
         let url = tmpURL()
         let store = ConfigStore(url: url)
-        for bad in ["min_agree: 0\n", "grace: soon\n", "theme: neon\n", "apps: 5\n", "on_timeout: explode\n"] {
+        for bad in ["accent: 1e30\n", "apps: [1e30]\n", "grace: 1e30s\n", "grace: 1e30\n", "min_agree: 0\n", "grace: soon\n", "theme: neon\n", "apps: 5\n", "on_timeout: explode\n"] {
             try bad.write(to: url, atomically: true, encoding: .utf8)
             expectThrows({ _ = try store.load() }, bad)
         }
@@ -154,5 +154,68 @@ func registerConfigTests() {
         expect(sem.wait(timeout: .now() + 2) == .success, "no callback within 2s")
         expectEqual(got.value?.grace, 99)
         store.stopWatching()
+    }
+
+    test("testHugeNumbersNeverTrapOnSave") {
+        var c = Config.default
+        c.grace = 1e300
+        let store = ConfigStore(url: tmpURL())
+        try store.save(c)   // must not trap
+        expectThrows({ _ = try store.load() })  // and the result is rejected on load
+    }
+
+    test("testWatchSurvivesAtomicRenameWithoutPoll") {
+        let url = tmpURL()
+        let store = ConfigStore(url: url)
+        try store.save(.default)
+        let graces = Box<[TimeInterval]>([])
+        let sem = DispatchSemaphore(value: 0)
+        store.watch(queue: DispatchQueue(label: "test.nopoll1"), pollInterval: nil) { result in
+            if case .success(let c) = result { graces.value.append(c.grace); sem.signal() }
+        }
+        try "grace: 11\n".write(to: url, atomically: true, encoding: .utf8)   // new inode
+        expect(sem.wait(timeout: .now() + 2) == .success, "atomic replace not seen")
+        // In-place write to the NEW inode: only the re-attached file source can see it (dir sees nothing).
+        let h = try FileHandle(forWritingTo: url)
+        h.truncateFile(atOffset: 0)
+        h.write(Data("grace: 12\n".utf8))
+        h.closeFile()
+        expect(sem.wait(timeout: .now() + 2) == .success, "in-place write after replace not seen")
+        expectEqual(graces.value.last ?? 0, 12)
+        store.stopWatching()
+    }
+
+    test("testWatchBeforeFileExistsWithoutPoll") {
+        let url = tmpURL()
+        let store = ConfigStore(url: url)
+        let got = Box<TimeInterval>(0)
+        let sem = DispatchSemaphore(value: 0)
+        store.watch(queue: DispatchQueue(label: "test.nopoll2"), pollInterval: nil) { result in
+            if case .success(let c) = result { got.value = c.grace; sem.signal() }
+        }
+        try "grace: 21\n".write(to: url, atomically: false, encoding: .utf8)
+        expect(sem.wait(timeout: .now() + 2) == .success, "first write not seen")
+        expectEqual(got.value, 21)
+        store.stopWatching()
+    }
+
+    test("testNoCallbacksAfterStopWatching") {
+        let url = tmpURL()
+        let store = ConfigStore(url: url)
+        try store.save(.default)
+        let calls = Box<Int>(0)
+        store.watch(queue: DispatchQueue(label: "test.stop"), pollInterval: 0.1) { _ in calls.value += 1 }
+        store.stopWatching()
+        try "grace: 77\n".write(to: url, atomically: true, encoding: .utf8)
+        Thread.sleep(forTimeInterval: 0.6)
+        expectEqual(calls.value, 0)
+    }
+
+    test("testQuickWatchStopCycles") {
+        let url = tmpURL()
+        let store = ConfigStore(url: url)
+        try store.save(.default)
+        for _ in 0..<50 { store.watch(queue: DispatchQueue(label: "test.cycle"), pollInterval: 0.01) { _ in }; store.stopWatching() }
+        expect(true)
     }
 }

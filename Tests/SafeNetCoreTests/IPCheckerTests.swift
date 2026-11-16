@@ -60,6 +60,50 @@ func registerIPCheckerTests() {
         let r = awaitResult { await IPChecker(services: [], timeout: 1).check() }
         expectEqual(r, [])
     }
+    test("testCheckEachReportsEveryServiceInOrder") {
+        let c = IPChecker(services: [
+            FakeIPService(answer: IPAnswer(ip: "1.1.1.1", country: "NL"), name: "a.example"),
+            FakeIPService(answer: IPAnswer(ip: "2.2.2.2", country: "DE"), error: URLError(.notConnectedToInternet), name: "b.example"),
+            FakeIPService(answer: IPAnswer(ip: "3.3.3.3", country: "NL"), delay: 0.1, name: "c.example"),
+        ], timeout: 1)
+        let r = awaitResult { await c.checkEach() }
+        expectEqual(r.map { $0.service }, ["a.example", "b.example", "c.example"])
+        expectEqual(r[0].outcome, .answer(IPAnswer(ip: "1.1.1.1", country: "NL")))
+        if case .failed(let why) = r[1].outcome {
+            expect(!why.isEmpty, "failure has a short reason")
+            expect(!why.contains("/"), "no URL or path in the reason: \(why)")
+        } else { expect(false, "b must be failed: \(r[1].outcome)") }
+        expectEqual(r[2].outcome, .answer(IPAnswer(ip: "3.3.3.3", country: "NL")))
+        expectEqual(r[0].answer, IPAnswer(ip: "1.1.1.1", country: "NL"))
+        expectEqual(r[1].answer, nil)
+    }
+    test("testCheckEachMarksSlowServicesAsTimedOut") {
+        let c = IPChecker(services: [
+            FakeIPService(answer: IPAnswer(ip: "1.1.1.1", country: "NL")),
+            FakeIPService(answer: IPAnswer(ip: "2.2.2.2", country: "NL"), delay: 5),
+            StubbornService(),
+        ], timeout: 0.4)
+        let t0 = now()
+        let r = awaitResult { await c.checkEach() }
+        expect(now() - t0 < 1.0, "returns at the timeout")
+        expectEqual(r.count, 3)
+        expectEqual(r[0].outcome, .answer(IPAnswer(ip: "1.1.1.1", country: "NL")))
+        expectEqual(r[1].outcome, .timedOut)
+        expectEqual(r[2].outcome, .timedOut)
+    }
+    test("testCheckEachNoServices") {
+        expectEqual(awaitResult { await IPChecker(services: [], timeout: 1).checkEach() }, [])
+    }
+    test("testCheckUnchangedByCheckEach") {
+        let c = IPChecker(services: [
+            FakeIPService(answer: IPAnswer(ip: "1.1.1.1", country: "NL")),
+            FakeIPService(answer: IPAnswer(ip: "2.2.2.2", country: "DE"), error: URLError(.timedOut)),
+        ], timeout: 1)
+        expectEqual(awaitResult { await c.check() }, [IPAnswer(ip: "1.1.1.1", country: "NL")])
+    }
+    test("testHTTPServiceNameIsHost") {
+        expectEqual(HTTPIPService(spec: HTTPIPService.defaults[0]).name, "ipinfo.io")
+    }
     test("testParseValidIPv4") {
         expectEqual(parse(#"{"ip":"1.2.3.4","country":"NL"}"#), IPAnswer(ip: "1.2.3.4", country: "NL"))
     }

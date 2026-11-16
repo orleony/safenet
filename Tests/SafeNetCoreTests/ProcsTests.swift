@@ -118,6 +118,29 @@ func registerProcsTests() {
         expect(!AppMatcher(match: "args:bot.py").matches(proc(31, "python3", path: "/usr/bin/python3", args: "/usr/bin/python3")))
     }
 
+    test("testMatchConjunctionAllPartsMustHold") {
+        let node = proc(50, "node", path: "/usr/local/bin/node", args: "node /usr/local/bin/claude --resume")
+        let vim = proc(51, "vim", path: "/usr/bin/vim", args: "vim /usr/local/bin/claude")
+        let m = AppMatcher(match: "node && args:/bin/claude")
+        expect(m.matches(node))
+        expect(!m.matches(vim), "name part fails")
+        expect(!AppMatcher(match: "node && args:other").matches(node), "args part fails")
+        for bad in ["node && ", " && args:x", "node &&   && args:x", "&&"] {
+            expect(!AppMatcher(match: bad).matches(node), "empty part never matches: '\(bad)'")
+        }
+    }
+
+    test("testMatchCmdPartComparesFirstTwoWordsBasename") {
+        let titled = proc(52, "node", path: "/usr/local/bin/node", args: "claude")
+        let shebang = proc(53, "node", path: "/usr/local/bin/node", args: "node /opt/homebrew/bin/claude -p hi")
+        let other = proc(54, "node", path: "/usr/local/bin/node", args: "node /usr/local/bin/claude-foo")
+        let later = proc(55, "node", path: "/usr/local/bin/node", args: "node /x/npm i claude")
+        let m = AppMatcher(match: "cmd:claude")
+        expect(m.matches(titled)); expect(m.matches(shebang))
+        expect(!m.matches(other), "basename must be equal"); expect(!m.matches(later), "only argv[0] / argv[1]")
+        expect(!AppMatcher(match: "cmd:").matches(titled))
+    }
+
     test("testEmptyMatchStringNeverMatches") {
         let all = [proc(40, "A"), proc(41, "B", args: "x y z"),
                    ProcInfo(pid: 42, ppid: 1, name: "", path: "", args: "", startTime: Date(), uid: me)]

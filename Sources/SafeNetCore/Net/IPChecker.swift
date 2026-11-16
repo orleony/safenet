@@ -5,6 +5,34 @@ import Darwin
 
 public protocol IPService {
     func fetch() async throws -> IPAnswer
+    /// Short label for the deep check (a host name, never a full URL).
+    var name: String { get }
+}
+
+extension IPService {
+    public var name: String { "IP-сервис" }
+}
+
+/// One service's outcome in `IPChecker.checkEach()` (deep check: every answer shown separately).
+public struct ServiceResult: Equatable {
+    public enum Outcome: Equatable {
+        case answer(IPAnswer)
+        /// Short reason without URLs or paths, e.g. "URLError -1009" or "bad response".
+        case failed(String)
+        /// No answer within the checker's timeout.
+        case timedOut
+    }
+    public var service: String
+    public var outcome: Outcome
+    public init(service: String, outcome: Outcome) { self.service = service; self.outcome = outcome }
+    public var answer: IPAnswer? { if case .answer(let a) = outcome { return a } else { return nil } }
+
+    static func reason(_ e: Error) -> String {
+        if let u = e as? URLError { return "URLError \(u.code.rawValue)" }
+        if e is HTTPIPService.ServiceError { return "bad response" }
+        let n = e as NSError
+        return "\(n.domain) \(n.code)"
+    }
 }
 
 /// Queries all services in parallel and returns only successful answers.
@@ -40,6 +68,67 @@ public final class IPChecker {
                 collector.finish()
             })
             collector.onFinish { tasks.forEach { $0.cancel() } }
+        }
+    }
+
+    /// Deep check: every service's own outcome, in `services` order. Same timeout rule as
+    /// `check()`; services still running at the timeout are reported as `.timedOut`.
+    public func checkEach() async -> [ServiceResult] {
+        if services.isEmpty { return [] }
+        let names = services.map { $0.name }
+        let box = EachCollector(count: services.count)
+        let services = self.services
+        let timeout = self.timeout
+        let outcomes = await withCheckedContinuation { (cont: CheckedContinuation<[ServiceResult.Outcome?], Never>) in
+            box.install(cont)
+            var tasks: [Task<Void, Never>] = []
+            for (i, s) in services.enumerated() {
+                tasks.append(Task {
+                    do { box.report(i, .answer(try await s.fetch())) } catch { box.report(i, .failed(ServiceResult.reason(error))) }
+                })
+            }
+            tasks.append(Task {
+                try? await Task.sleep(nanoseconds: UInt64(max(0, timeout) * 1_000_000_000))
+                box.finish()
+            })
+            box.onFinish { tasks.forEach { $0.cancel() } }
+        }
+        return zip(names, outcomes).map { ServiceResult(service: $0.0, outcome: $0.1 ?? .timedOut) }
+    }
+
+    private final class EachCollector {
+        private let lock = NSLock()
+        private var outcomes: [ServiceResult.Outcome?]
+        private var reported = 0
+        private var cont: CheckedContinuation<[ServiceResult.Outcome?], Never>?
+        private var cleanup: (() -> Void)?
+        private var done = false
+
+        init(count: Int) { outcomes = Array(repeating: nil, count: count) }
+
+        func install(_ c: CheckedContinuation<[ServiceResult.Outcome?], Never>) { lock.lock(); cont = c; lock.unlock() }
+        func onFinish(_ f: @escaping () -> Void) {
+            lock.lock()
+            if done { lock.unlock(); f() } else { cleanup = f; lock.unlock() }
+        }
+        func report(_ i: Int, _ o: ServiceResult.Outcome) {
+            lock.lock()
+            if done { lock.unlock(); return }
+            outcomes[i] = o
+            reported += 1
+            let all = reported >= outcomes.count
+            lock.unlock()
+            if all { finish() }
+        }
+        func finish() {
+            lock.lock()
+            if done { lock.unlock(); return }
+            done = true
+            let c = cont, result = outcomes, f = cleanup
+            cont = nil; cleanup = nil
+            lock.unlock()
+            f?()
+            c?.resume(returning: result)
         }
     }
 
@@ -88,8 +177,9 @@ public struct FakeIPService: IPService {
     public let answer: IPAnswer
     public let delay: TimeInterval
     public let error: Error?
-    public init(answer: IPAnswer, delay: TimeInterval = 0, error: Error? = nil) {
-        self.answer = answer; self.delay = delay; self.error = error
+    public let name: String
+    public init(answer: IPAnswer, delay: TimeInterval = 0, error: Error? = nil, name: String = "fake") {
+        self.answer = answer; self.delay = delay; self.error = error; self.name = name
     }
     public func fetch() async throws -> IPAnswer {
         if delay > 0 { try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000)) }
@@ -126,6 +216,7 @@ public struct HTTPIPService: IPService {
 
     public let spec: Spec
     public let requestTimeout: TimeInterval
+    public var name: String { spec.url.host ?? "IP-сервис" }
     private let session: URLSession
 
     public init(spec: Spec, requestTimeout: TimeInterval = 5) {

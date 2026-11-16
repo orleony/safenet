@@ -69,28 +69,49 @@ public func isProtected(_ p: ProcInfo, selfPID: Int32, myUID: uid_t) -> Bool {
 
 /// Matches processes against a `CustomApp.match` string:
 /// - `args:<fragment>`: the command line contains the fragment (case-sensitive);
+/// - `cmd:<name>`: the basename of argv[0] or argv[1] equals the name (case-sensitive), e.g.
+///   `cmd:claude` for `node /usr/local/bin/claude` or a node process titled `claude`;
 /// - a string containing "/": the executable path contains it (case-insensitive);
-/// - otherwise: the process / executable name equals it (case-insensitive).
-/// An empty, whitespace-only, bare "args:" or slashes-only string never matches anything.
+/// - otherwise: the process / executable name equals it (case-insensitive);
+/// - `A && B && …`: every part must match (e.g. `node && cmd:claude`: a node process running claude,
+///   never an editor or `npm i` that merely mentions it).
+/// An empty, whitespace-only, bare "args:"/"cmd:" or slashes-only string (or part) never matches anything.
 public struct AppMatcher: Equatable {
-    public enum Kind: Equatable { case name(String), path(String), args(String), never }
+    public indirect enum Kind: Equatable { case name(String), path(String), args(String), cmd(String), all([Kind]), never }
     public let kind: Kind
 
     public init(match: String) {
-        let t = match.trimmingCharacters(in: .whitespacesAndNewlines)
-        if t.lowercased().hasPrefix("args:") {
-            let frag = String(t.dropFirst(5)).trimmingCharacters(in: .whitespacesAndNewlines)
-            kind = frag.isEmpty ? .never : .args(frag)
-        } else if t.contains("/") {
-            kind = t.allSatisfy({ $0 == "/" || $0.isWhitespace }) ? .never : .path(t)
+        let parts = match.components(separatedBy: "&&")
+        if parts.count > 1 {
+            let kinds = parts.map(AppMatcher.single)
+            kind = kinds.contains(.never) ? .never : .all(kinds)
         } else {
-            kind = t.isEmpty ? .never : .name(t)
+            kind = AppMatcher.single(match)
         }
+    }
+
+    static func single(_ match: String) -> Kind {
+        let t = match.trimmingCharacters(in: .whitespacesAndNewlines)
+        let lower = t.lowercased()
+        if lower.hasPrefix("args:") {
+            let frag = String(t.dropFirst(5)).trimmingCharacters(in: .whitespacesAndNewlines)
+            return frag.isEmpty ? .never : .args(frag)
+        }
+        if lower.hasPrefix("cmd:") {
+            let n = String(t.dropFirst(4)).trimmingCharacters(in: .whitespacesAndNewlines)
+            return n.isEmpty || n.contains("/") ? .never : .cmd(n)
+        }
+        if t.contains("/") {
+            return t.allSatisfy({ $0 == "/" || $0.isWhitespace }) ? .never : .path(t)
+        }
+        return t.isEmpty ? .never : .name(t)
     }
 
     public init(_ app: CustomApp) { self.init(match: app.match) }
 
-    public func matches(_ p: ProcInfo) -> Bool {
+    public func matches(_ p: ProcInfo) -> Bool { AppMatcher.matches(kind, p) }
+
+    private static func matches(_ kind: Kind, _ p: ProcInfo) -> Bool {
         switch kind {
         case .never: return false
         case .name(let n):
@@ -100,6 +121,11 @@ public struct AppMatcher: Equatable {
             return !p.path.isEmpty && p.path.range(of: frag, options: .caseInsensitive) != nil
         case .args(let frag):
             return p.args.contains(frag)
+        case .cmd(let n):
+            let words = p.args.split(separator: " ", maxSplits: 2, omittingEmptySubsequences: true).prefix(2)
+            return words.contains { ($0.split(separator: "/").last.map(String.init) ?? "") == n }
+        case .all(let parts):
+            return !parts.isEmpty && parts.allSatisfy { matches($0, p) }
         }
     }
 
@@ -111,7 +137,7 @@ public struct AppMatcher: Equatable {
         let direct = all.filter(matches)
         guard !direct.isEmpty else { return [] }
         var picked = Dictionary(direct.map { ($0.pid, $0) }, uniquingKeysWith: { a, _ in a })
-        if case .args = kind {} else {
+        if kind.expandsToBundle {
             let roots = Set(direct.compactMap { $0.bundleRoot }).map { $0.lowercased() + "/" }
             if !roots.isEmpty {
                 for p in all where picked[p.pid] == nil {
@@ -232,5 +258,16 @@ public struct SystemProcessTable: ProcessTable {
             i += 1
         }
         return (exec, parts.joined(separator: " "))
+    }
+}
+
+extension AppMatcher.Kind {
+    /// Name / path rules also pick helpers of the same `.app`; command-line rules do not
+    /// (interpreters such as Python.app or node are shared by unrelated scripts).
+    var expandsToBundle: Bool {
+        switch self {
+        case .name, .path: return true
+        case .args, .cmd, .all, .never: return false
+        }
     }
 }

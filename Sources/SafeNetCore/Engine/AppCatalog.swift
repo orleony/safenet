@@ -23,13 +23,15 @@ public enum AppCatalog {
     public static let presets: [Preset] = [
         // Desktop app only: the CLI never lives inside Claude.app.
         Preset(id: "claude", name: "Claude", matches: ["/Claude.app/"], group: aiApps),
-        // Claude Code CLI only: npm install runs `node …/@anthropic-ai/claude-code/cli.js`; the
-        // native install runs from ~/.local/share/claude/ (symlinked from ~/.local/bin/claude) and
-        // the older local install from ~/.claude/local/. No name rule: "claude" would also match
-        // the desktop app's executable.
+        // Claude Code CLI only (never the desktop app, whose executable is also named "Claude"):
+        //  - npm install: a node process running .../@anthropic-ai/claude-code/cli.js, started via the
+        //    `claude` symlink (`node …/bin/claude`), or retitled to "claude" (process.title rewrites argv);
+        //    the "node &&" part keeps editors/pagers that open those files, and `npm i -g …`, out;
+        //  - native install: ~/.local/share/claude/ (symlinked from ~/.local/bin/claude);
+        //  - Homebrew cask: …/Caskroom/claude-code/<version>/claude;  older local install: ~/.claude/local/.
         Preset(id: "claude-code", name: "Claude Code",
-               matches: ["args:@anthropic-ai/claude-code", "args:claude-code/cli.js",
-                         "/.local/share/claude/", "/.claude/local/"], group: aiApps),
+               matches: ["node && args:/@anthropic-ai/claude-code/cli.js", "node && cmd:claude",
+                         "/.local/share/claude/", "/Caskroom/claude-code/", "/.claude/local/"], group: aiApps),
         Preset(id: "chatgpt", name: "ChatGPT", matches: ["/ChatGPT.app/"], group: aiApps),
         Preset(id: "cursor", name: "Cursor", matches: ["/Cursor.app/"], group: aiApps),
         Preset(id: "perplexity", name: "Perplexity", matches: ["/Perplexity.app/"], group: aiApps),
@@ -38,7 +40,7 @@ public enum AppCatalog {
         Preset(id: "arc", name: "Arc", matches: ["/Arc.app/"], group: browsersForAI),
         Preset(id: "firefox", name: "Firefox", matches: ["/Firefox.app/"], group: browsersForAI),
         Preset(id: "safari", name: "Safari", matches: [], group: browsersForAI,
-               unsupported: "system app: Safari and its web processes run from /System, which is never frozen"),
+               unsupported: "системное приложение: Safari и его веб-процессы запускаются из /System, а системные процессы SafeNet никогда не замораживает"),
     ]
 
     /// Presets the UI may offer for selection.

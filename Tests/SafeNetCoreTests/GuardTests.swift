@@ -637,6 +637,40 @@ func registerGuardTests() {
         expectEqual(Set(desk.flatMap { $0.select(from: all) }.map { $0.pid }), [100, 101])
     }
 
+    test("testClaudeCodePresetIgnoresInstallersAndEditors") {
+        var c = Config.default
+        c.apps = ["claude-code"]
+        func p(_ pid: Int32, _ name: String, _ path: String, _ args: String) -> ProcInfo {
+            ProcInfo(pid: pid, ppid: 1, name: name, path: path, args: args, startTime: Date(timeIntervalSince1970: 1000), uid: me)
+        }
+        let yes = [
+            p(1, "node", "/usr/local/bin/node", "node /usr/local/lib/node_modules/@anthropic-ai/claude-code/cli.js"),
+            p(2, "node", "/opt/homebrew/bin/node", "claude"),                                    // process.title = claude
+            p(3, "node", "/Users/u/.nvm/versions/node/v20/bin/node", "node /Users/u/.npm-global/bin/claude --resume"),
+            p(4, "claude", "/opt/homebrew/Caskroom/claude-code/1.0.0/claude", "claude"),
+            p(5, "claude", "/usr/local/Caskroom/claude-code/2.0.1/claude", "claude -p hi"),
+            p(6, "2.0.1", "/Users/u/.local/share/claude/versions/2.0.1", "claude"),
+        ]
+        let no = [
+            p(10, "node", "/usr/local/bin/node", "node /usr/local/bin/npm i -g @anthropic-ai/claude-code"),
+            p(11, "npm", "/usr/local/bin/npm", "npm install -g @anthropic-ai/claude-code"),
+            p(12, "vim", "/usr/bin/vim", "vim /usr/local/lib/node_modules/@anthropic-ai/claude-code/cli.js"),
+            p(13, "Electron", "/Applications/Visual Studio Code.app/Contents/MacOS/Electron",
+              "/Applications/Visual Studio Code.app/Contents/MacOS/Electron /usr/local/lib/node_modules/@anthropic-ai/claude-code/cli.js"),
+            p(14, "less", "/usr/bin/less", "less /Users/u/.npm-global/bin/claude"),
+            p(15, "node", "/usr/local/bin/node", "node /usr/local/bin/claude-usage-report"),
+            p(16, "Claude", "/Applications/Claude.app/Contents/MacOS/Claude", "/Applications/Claude.app/Contents/MacOS/Claude"),
+        ]
+        let m = AppCatalog.matchers(for: "claude-code", in: c)
+        for x in yes { expect(m.contains { $0.matches(x) }, "should match \(x.args) @ \(x.path)") }
+        for x in no { expect(!m.contains { $0.matches(x) }, "should NOT match \(x.args) @ \(x.path)") }
+    }
+
+    test("testUnsupportedReasonIsRussianText") {
+        let r = AppCatalog.preset("safari")?.unsupported ?? ""
+        expect(r.range(of: "[а-яА-Я]", options: .regularExpression) != nil, "reason shown in the UI as is: \(r)")
+    }
+
     test("testSafariPresetUnsupportedAndNeverProtected") {
         var c = Config.default
         c.apps = ["safari", "claude"]

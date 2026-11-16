@@ -123,6 +123,38 @@ func registerConfigTests() {
         store.stopWatching()
     }
 
+    test("testEmptyConfigFileIsAnError") {
+        let url = tmpURL()
+        let store = ConfigStore(url: url)
+        for text in ["", "   \n\t\n", "# only a comment\n"] {
+            try text.write(to: url, atomically: true, encoding: .utf8)
+            expectThrows({ _ = try store.load() }, "empty/whitespace/comment-only must not load as defaults: \(text.debugDescription)")
+        }
+    }
+
+    test("testEmptyConfigFileOnHotReloadKeepsOld") {
+        let url = tmpURL()
+        let store = ConfigStore(url: url)
+        var good = Config.default
+        good.allow = AllowList(ips: [], countries: ["NL"])
+        try store.save(good)
+        let current = Box<Config>(try store.load())
+        let failures = Box<Int>(0)
+        let sem = DispatchSemaphore(value: 0)
+        store.watch(queue: DispatchQueue(label: "test.watch.empty")) { result in
+            switch result {
+            case .success(let c): current.value = c
+            case .failure: failures.value += 1
+            }
+            sem.signal()
+        }
+        try "  \n".write(to: url, atomically: false, encoding: .utf8)   // editor truncated the file
+        expect(sem.wait(timeout: .now() + 2) == .success, "no callback for emptied file")
+        expectEqual(failures.value, 1)
+        expectEqual(current.value.allow.countries, ["NL"], "allow list must survive an emptied file")
+        store.stopWatching()
+    }
+
     test("testWatchFiresOnEdit") {
         let url = tmpURL()
         let store = ConfigStore(url: url)
@@ -180,7 +212,7 @@ func registerConfigTests() {
         h.truncateFile(atOffset: 0)
         h.write(Data("grace: 12\n".utf8))
         h.closeFile()
-        // truncate briefly leaves an empty file, which may be reloaded as defaults (grace 20)
+        // truncate briefly leaves an empty file (reported as a failure, ignored here)
         // before the "grace: 12" write is seen: wait until 12 arrives, not just for any event.
         let deadline = DispatchTime.now() + 4
         var seen12 = false

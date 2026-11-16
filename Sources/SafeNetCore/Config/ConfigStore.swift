@@ -2,7 +2,8 @@ import Foundation
 
 /// Reads/writes config.yaml and watches it for external edits.
 ///
-/// - `load()`: missing file => `Config.default` (file is NOT created). Malformed file => throws.
+/// - `load()`: missing file => `Config.default` (file is NOT created). Malformed file => throws;
+///   an empty, whitespace-only or comment-only file also throws (it is a half-written edit).
 /// - `save(_:)`: atomic (temp file + rename), creates the parent directory. The file always stays
 ///   valid YAML. Comment preservation is best-effort: full-line comments that sit directly above a
 ///   map key (not inside lists) are re-attached to that key by path; trailing `# ...` comments and
@@ -40,7 +41,14 @@ public final class ConfigStore {
 
     static func decode(_ data: Data) throws -> Config {
         guard let text = String(data: data, encoding: .utf8) else { throw ConfigError("file is not valid UTF-8") }
-        return try Config(yaml: try MiniYAML.parse(text))
+        let yaml = try MiniYAML.parse(text)
+        // An empty / whitespace-only / comment-only file is NOT "defaults": editors truncate before
+        // writing, and defaults have an empty allow list (= freeze everything). Keep the old config.
+        switch yaml {
+        case .null, .map([]): throw ConfigError("file is empty")
+        default: break
+        }
+        return try Config(yaml: yaml)
     }
 
     public func save(_ c: Config) throws {

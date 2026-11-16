@@ -285,6 +285,46 @@ func registerEngineTests() {
 
     // MARK: Fix round 1
 
+    test("testFirstSaveOverBrokenFileKeepsBrokenCopy") {
+        let r = ERig(config: cfg())
+        let broken = "apps: [telegram\n  bad: : :\n"
+        try broken.write(to: r.store.url, atomically: true, encoding: .utf8)
+        r.rebuild()
+        r.engine.start(watchConfig: false)
+        r.engine.toggleApp("chatgpt")                 // first save from the UI
+        let copies = try FileManager.default.contentsOfDirectory(atPath: r.dir.path).filter { $0.hasPrefix("config.broken-") && $0.hasSuffix(".yaml") }
+        expectEqual(copies.count, 1, "one backup of the broken file: \(copies)")
+        if let f = copies.first {
+            try expectEqual(String(contentsOf: r.dir.appendingPathComponent(f), encoding: .utf8), broken)
+        }
+        expect(r.notices.contains { $0.contains("config.broken-") }, "user told about the copy: \(r.notices)")
+        expect(!r.notices.contains { $0.contains(r.dir.path) }, "no paths in the notice")
+        try expectEqual(r.store.load().apps, ["telegram", "chatgpt"], "file now valid")
+        r.engine.toggleApp("chatgpt")                 // later saves: no new copies
+        let again = try FileManager.default.contentsOfDirectory(atPath: r.dir.path).filter { $0.hasPrefix("config.broken-") }
+        expectEqual(again.count, 1)
+    }
+
+    test("testSaveOverValidFileMakesNoBrokenCopy") {
+        let r = ERig(config: cfg())
+        r.engine.start(watchConfig: false)
+        r.engine.toggleApp("chatgpt")
+        let copies = try FileManager.default.contentsOfDirectory(atPath: r.dir.path).filter { $0.hasPrefix("config.broken-") }
+        expectEqual(copies, [])
+    }
+
+    test("testStatusReportsClosedAppsOnly") {
+        var c = cfg(apps: ["telegram", "chatgpt"])
+        c.appRules = ["chatgpt": AllowList(ips: [], countries: ["RU"])]
+        let r = ERig(config: c)
+        r.engine.start(watchConfig: false)
+        r.engine.networkChanged(online)
+        r.table.procs = []                            // the app quit after SIGTERM (fake table keeps it otherwise)
+        r.engine.guardian.closeNow()
+        expectEqual(r.engine.guardian.closedApps, ["telegram"], "\(r.engine.status.state)")
+        expectEqual(r.engine.status.closedApps, ["telegram"])
+    }
+
     test("testBrokenConfigAtLaunchUsesLastGood") {
         let r = ERig(config: cfg())                  // successful load at init writes last-good
         expect(FileManager.default.fileExists(atPath: r.lastGood.path), "last-good written after a successful load")

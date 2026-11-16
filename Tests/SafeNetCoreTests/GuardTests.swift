@@ -386,6 +386,7 @@ func registerGuardTests() {
         if case .closed = g.state {} else { expect(false, "\(g.state)") }
         expectEqual(r.events(.closed).map { $0.app }, ["claude"])
         expectEqual(r.events(.closed).map { $0.detail }, ["closeNow"])
+        expectEqual(g.closedApps, ["claude"], "only the app that was actually closed")
         expectEqual(r.closedBatches, [[100]])
         r.clock.advance(by: 100)   // the old deadline is gone
         expectEqual(r.sig.pids(SIGTERM), [100])

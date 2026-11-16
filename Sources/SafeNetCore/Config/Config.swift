@@ -58,6 +58,8 @@ public struct Config: Equatable {
     public var fontStyle: FontStyle
     public var menubar: MenubarDisplay
     public var trustedNetworks: [TrustedNetwork]
+    /// Default length of "Пауза" (YAML `pause_default`), 15 min.
+    public var pauseDefault: TimeInterval = 900
 
     public static let `default` = Config(
         apps: [], customApps: [], allow: AllowList(), appRules: [:], appGrace: [:],
@@ -114,6 +116,7 @@ public struct Config: Equatable {
         if let v = yaml["density"] { c.density = try Config.enumValue(v, "density") }
         if let v = yaml["font_style"] { c.fontStyle = try Config.enumValue(v, "font_style") }
         if let v = yaml["menubar"] { c.menubar = try Config.enumValue(v, "menubar") }
+        if let v = yaml["pause_default"] { c.pauseDefault = try Config.duration(v, "pause_default") }
         if let v = yaml["trusted_networks"] {
             c.trustedNetworks = try Config.items(v, "trusted_networks").map {
                 TrustedNetwork(name: try Config.str($0["name"], "trusted_networks.name"),
@@ -126,6 +129,7 @@ public struct Config: Equatable {
         guard c.grace > 0 else { throw ConfigError("grace must be > 0") }
         guard c.closeTimeout >= 0 else { throw ConfigError("close_timeout must be >= 0") }
         guard c.checkInterval > 0 else { throw ConfigError("check_interval must be > 0") }
+        guard c.pauseDefault > 0 else { throw ConfigError("pause_default must be > 0") }
         guard c.minAgree >= 1 else { throw ConfigError("min_agree must be >= 1") }
         for (k, g) in c.appGrace where g <= 0 { throw ConfigError("app_grace.\(k) must be > 0") }
         self = c
@@ -159,6 +163,7 @@ public struct Config: Equatable {
             YAMLEntry("density", .string(density.rawValue)),
             YAMLEntry("font_style", .string(fontStyle.rawValue)),
             YAMLEntry("menubar", .string(menubar.rawValue)),
+            YAMLEntry("pause_default", Config.fmt(pauseDefault)),
             YAMLEntry("trusted_networks", .list(trustedNetworks.map {
                 .map([YAMLEntry("name", .string($0.name)), YAMLEntry("mac", .string($0.mac)),
                       YAMLEntry("ip", .string($0.ip)), YAMLEntry("subnet", .string($0.subnet))]) })),

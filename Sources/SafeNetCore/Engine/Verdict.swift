@@ -71,7 +71,24 @@ public func evaluate(_ o: Observation, allow: AllowList, minAgree: Int, dnsCheck
 }
 
 /// Exact-IP / CIDR matching for IPv4 and IPv6. Anything malformed never matches.
-enum IPMatcher {
+public enum IPMatcher {
+    /// An allow-list entry that can ever match: an exact IPv4/IPv6 address, or address/prefix with
+    /// 0...32 (IPv4) / 0...128 (IPv6). Surrounding whitespace is NOT accepted (callers trim).
+    public static func isValidEntry(_ entry: String) -> Bool {
+        let parts = entry.split(separator: "/", maxSplits: 1, omittingEmptySubsequences: false).map(String.init)
+        guard let net = parse(parts[0]) else { return false }
+        if parts.count == 1 { return true }
+        let p = parts[1]
+        guard !p.isEmpty, p.count <= 3, p.allSatisfy({ $0.isASCII && $0.isNumber }), let n = Int(p) else { return false }
+        return n <= net.count * 8
+    }
+
+    /// Prefix length of a CIDR entry (nil for an exact address or a malformed entry).
+    public static func prefixLength(_ entry: String) -> Int? {
+        let parts = entry.split(separator: "/", maxSplits: 1).map(String.init)
+        return parts.count == 2 && isValidEntry(entry) ? Int(parts[1]) : nil
+    }
+
     static func matches(_ ip: String, entry: String) -> Bool {
         guard let addr = parse(ip) else { return false }
         let parts = entry.split(separator: "/", maxSplits: 1, omittingEmptySubsequences: false).map(String.init)

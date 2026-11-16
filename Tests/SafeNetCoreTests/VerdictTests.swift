@@ -106,4 +106,12 @@ func registerVerdictTests() {
     test("testConflictingQuorumsAreUnconfirmed") {
         expectEqual(evaluate(obs([("1.2.3.4", "NL"), ("5.6.7.8", "RU")]), allow: nl, minAgree: 1, dnsCheck: .warn), .freeze(.unconfirmed))
     }
+    test("testIPMatcherValidEntry") {
+        for ok in ["1.2.3.4", "10.0.0.0/8", "0.0.0.0/0", "2001:db8::1", "2001:db8::/32"] { expect(IPMatcher.isValidEntry(ok), ok) }
+        for bad in ["", "1.2.3", "10.0.0.0/33", "10.0.0.0/", "/8", "a.b.c.d", " 1.2.3.4", "2001:db8::/129", "1.2.3.4/0x"] {
+            expect(!IPMatcher.isValidEntry(bad), bad)
+        }
+        expectEqual(IPMatcher.prefixLength("10.0.0.0/8"), 8)
+        expectEqual(IPMatcher.prefixLength("10.0.0.1"), nil)
+    }
 }

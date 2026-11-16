@@ -31,6 +31,17 @@ func registerConfigTests() {
         expect(c.blockWhenOffline)
     }
 
+    test("testPauseDefaultKey") {
+        expectEqual(Config.default.pauseDefault, 900, "15 min by default")
+        var c = Config.default
+        c.pauseDefault = 300
+        let store = ConfigStore(url: tmpURL())
+        try store.save(c)
+        try expectEqual(store.load().pauseDefault, 300)
+        try expectEqual(Config(yaml: MiniYAML.parse("pause_default: 1h\n")).pauseDefault, 3600)
+        expectThrows({ _ = try Config(yaml: MiniYAML.parse("pause_default: 0\n")) }, "must be > 0")
+    }
+
     test("testRoundTripYAML") {
         var c = Config.default
         c.apps = ["Claude", "Cursor"]

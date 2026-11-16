@@ -132,6 +132,9 @@ public final class Guard {
     /// Apps that should be frozen but whose running processes could not be stopped.
     public var freezeFailedApps: Set<String> { locked { failedSet() } }
     /// Apps released by `on_timeout: resume`; protected again after the next passing check.
+    /// Apps closed (timeout or "close now") that have not passed a check since.
+    public var closedApps: Set<String> { locked { Set(apps.filter { $0.value.phase == .closed }.keys) } }
+
     public var releasedApps: Set<String> { locked { Set(apps.filter { $0.value.phase == .released }.keys) } }
     /// Pids still stopped although a resume was requested (retried on every tick).
     public var unresolvedPIDs: Set<Int32> { locked { pending } }

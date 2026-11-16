@@ -7,6 +7,8 @@ public struct EngineStatus: Equatable {
     public var frozenApps: Set<String> = []
     public var releasedApps: Set<String> = []
     public var freezeFailedApps: Set<String> = []
+    /// Apps actually closed (not every app when the overall state is `.closed`).
+    public var closedApps: Set<String> = []
     /// Answers of the last finished check (all services, IPv4 and IPv6).
     public var answers: [IPAnswer] = []
     /// The single IP + country confirmed by >= min_agree services, else nil.
@@ -73,6 +75,8 @@ public final class Engine {
     public var onStatus: ((EngineStatus) -> Void)?
     public var onConfig: ((Config) -> Void)?
     public var onConfigError: ((String) -> Void)?
+    /// config.yaml was loaded (hot reload) or saved successfully: earlier config errors are over.
+    public var onConfigHealthy: (() -> Void)?
     /// Informational message for the window (no notification), e.g. a refused write in test mode.
     public var onNotice: ((String) -> Void)?
 
@@ -92,12 +96,16 @@ public final class Engine {
     private var running = false
     /// Error met while loading the config at init (reported once `start()` runs).
     private var startupError: String?
+    /// config.yaml on disk failed to load (at launch or on hot reload): the first save keeps a
+    /// `config.broken-<time>.yaml` copy before overwriting it, so the user's edit is not lost.
+    private var fileBroken = false
 
     public init(deps: EngineDeps) {
         self.deps = deps
         var err: String?
         config = Engine.loadOrCreate(deps.store, writesBlocked: deps.configWritesBlocked != nil, error: &err)
         startupError = err
+        fileBroken = FileManager.default.fileExists(atPath: deps.store.url.path) && (try? deps.store.load()) == nil
         guardian = Guard(config: config, freezer: deps.freezer, clock: deps.clock, log: deps.log)
         guardian.callbackQueue = deps.queue
     }
@@ -170,10 +178,13 @@ public final class Engine {
                 switch r {
                 case .success(let c):
                     guard let self = self, self.running else { return }
+                    self.fileBroken = false
+                    self.onConfigHealthy?()
                     if self.deps.configWritesBlocked == nil { Engine.saveLastGood(c, self.deps.store) }
                     self.apply(config: c)
                 case .failure(let e):
                     guard let self = self, self.running else { return }
+                    self.fileBroken = true
                     self.onConfigError?("config.yaml не загружен (\(Engine.safeDescription(e))). Работаю на прежних настройках.")
                 }
             }
@@ -272,10 +283,14 @@ public final class Engine {
         guard c != config else { return }
         if let msg = deps.configWritesBlocked {
             onNotice?(msg)
+        } else if fileBroken && !backupBrokenFile() {
+            onConfigError?("config.yaml с ошибкой не перезаписан: не удалось сохранить его копию. Изменение действует до перезапуска.")
         } else {
             do {
                 try deps.store.save(c)
+                fileBroken = false
                 Engine.saveLastGood(c, deps.store)
+                onConfigHealthy?()
             } catch {
                 onConfigError?("не удалось сохранить config.yaml (\(Engine.safeDescription(error)))")
             }
@@ -284,6 +299,31 @@ public final class Engine {
     }
 
     public var isRunning: Bool { running }
+
+    /// Event history (thread-safe; readable from any queue).
+    public var log: EventLog { deps.log }
+
+    /// Copies the broken config.yaml to `config.broken-<yyyyMMdd-HHmmss>.yaml` next to it and tells
+    /// the user (file name only, no path). False when the copy could not be written.
+    private func backupBrokenFile() -> Bool {
+        let src = deps.store.url
+        guard FileManager.default.fileExists(atPath: src.path) else { return true }
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX"); f.dateFormat = "yyyyMMdd-HHmmss"
+        let stamp = f.string(from: deps.clock.now)
+        let dir = src.deletingLastPathComponent()
+        var name = "config.broken-\(stamp).yaml", n = 2
+        while FileManager.default.fileExists(atPath: dir.appendingPathComponent(name).path) {
+            name = "config.broken-\(stamp)-\(n).yaml"; n += 1
+        }
+        do {
+            try FileManager.default.copyItem(at: src, to: dir.appendingPathComponent(name))
+        } catch {
+            return false
+        }
+        onNotice?("config.yaml с ошибкой сохранён как \(name) (в той же папке), а настройки записаны заново.")
+        return true
+    }
 
     /// First run: allow the country of the currently confirmed IP. False when nothing is confirmed.
     @discardableResult
@@ -359,6 +399,7 @@ public final class Engine {
         s.frozenApps = guardian.frozenApps
         s.releasedApps = guardian.releasedApps
         s.freezeFailedApps = guardian.freezeFailedApps
+        s.closedApps = guardian.closedApps
         s.answers = lastAnswers
         s.confirmed = Engine.confirmed(Engine.quorumAnswers(lastAnswers), minAgree: config.minAgree)
         s.snapshot = snapshot

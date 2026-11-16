@@ -10,8 +10,13 @@ public final class AppState: ObservableObject {
     @Published public private(set) var status = EngineStatus()
     @Published public private(set) var config: Config
     @Published public private(set) var autostartEnabled = Autostart.isEnabled
-    /// Last config / autostart error shown in the window (nil = none).
-    @Published public private(set) var lastError: String?
+    /// Separate message channels, so one kind never wipes another:
+    /// config load/save errors (cleared once a load or save succeeds again) ...
+    @Published public private(set) var configError: String?
+    /// ... informational notices from the engine (test mode refusing writes, broken-file copy) ...
+    @Published public private(set) var notice: String?
+    /// ... and the autostart result (set/cleared only by `setAutostart`).
+    @Published public private(set) var autostartError: String?
     /// Apps shown in the menu window: selected ones plus ones toggled off during this session
     /// (so a row does not vanish under the mouse).
     @Published public private(set) var shownApps: [String] = []
@@ -23,6 +28,7 @@ public final class AppState: ObservableObject {
     public let theme: Theme
 
     private let system: LiveSystem?
+    private let previewLog: EventLog?
     private let notifier = Notifier()
     private var tracker = NoticeTracker()
     private var sessionApps: [String] = []
@@ -41,15 +47,18 @@ public final class AppState: ObservableObject {
         theme = Theme(config: system.engine.config, appearance: appearance)
         rebuildShownApps()
         system.onStatus = { [weak self] s in self?.receive(s) }
-        system.onConfig = { [weak self] c in self?.receive(c) }
-        system.onConfigError = { [weak self] e in self?.reportConfigError(e) }
-        system.onNotice = { [weak self] e in self?.lastError = e }
+        system.onConfig = { [weak self] c in self?.receiveConfig(c) }
+        system.onConfigError = { [weak self] e in self?.receiveConfigError(e) }
+        system.onConfigHealthy = { [weak self] in self?.configHealthy() }
+        system.onNotice = { [weak self] e in self?.receiveNotice(e) }
         configReadOnly = system.configReadOnly
     }
 
-    /// Static instance for previews / UI tests (no engine).
-    public init(preview config: Config, status: EngineStatus, testMode: TestMode? = nil, systemScheme: ColorScheme = .dark) {
+    /// Static instance for previews / UI tests (no engine). `log` feeds the journal tab.
+    public init(preview config: Config, status: EngineStatus, testMode: TestMode? = nil, systemScheme: ColorScheme = .dark,
+                log: EventLog? = nil) {
         system = nil
+        previewLog = log
         self.testMode = testMode
         appearance = SystemAppearance(provider: { systemScheme == .dark ? "Dark" : nil },
                                       changes: Empty<Void, Never>().eraseToAnyPublisher())
@@ -74,8 +83,10 @@ public final class AppState: ObservableObject {
         if !sessionApps.contains(id) { sessionApps.append(id) }
         system?.perform { $0.toggleApp(id) }
     }
-    public func pause(for seconds: TimeInterval = 15 * 60) { system?.perform { $0.guardian.pause(for: seconds) } }
-    public func pause() { pause(for: 15 * 60) }
+    public func pause(for seconds: TimeInterval) { system?.perform { $0.guardian.pause(for: seconds) } }
+    /// "Пауза" with the configured default length (`pause_default`).
+    public func pause() { pause(for: defaultPause) }
+    public var defaultPause: TimeInterval { config.pauseDefault }
     public func resumeProtection() { system?.perform { $0.guardian.resume() } }
     /// "Разрешить этот IP": the Guard offers the confirmed IP, the engine appends it to allow.ips.
     public func allowCurrent() { system?.perform { $0.guardian.allowCurrentIP() } }
@@ -85,9 +96,52 @@ public final class AppState: ObservableObject {
     public func closeNow() { system?.perform { $0.guardian.closeNow() } }
     public func checkNow() { system?.perform { $0.checkNow() } }
 
+    /// Every settings change goes through the engine (`Engine.updateConfig`): validation of the
+    /// written file, test mode refusing writes and the broken-file copy all apply. Preview: in memory.
+    public func update(_ mutate: @escaping (inout Config) -> Void) {
+        if let s = system {
+            s.perform { $0.updateConfig(mutate) }
+        } else {
+            var c = config; mutate(&c); receiveConfig(c)
+        }
+    }
+
     public func setAutostart(_ on: Bool) {
-        do { try Autostart.set(on); lastError = nil } catch { lastError = "Автозапуск: \((error as? Autostart.Unavailable)?.description ?? Engine.safeDescription(error))" }
+        do { try Autostart.set(on); autostartError = nil } catch { autostartError = "Автозапуск: \((error as? Autostart.Unavailable)?.description ?? Engine.safeDescription(error))" }
         autostartEnabled = Autostart.isEnabled
+    }
+
+    public func dismissNotice() { notice = nil }
+
+    // MARK: Journal, deep check, files
+
+    public var eventLog: EventLog? { system?.engine.log ?? previewLog }
+
+    /// Runs the on-demand deep check off the main thread; `done` is called on the main queue.
+    public func runDeepCheck(_ done: @escaping (DeepCheckData) -> Void) {
+        guard let s = system else { return }
+        s.deepCheck { d in DispatchQueue.main.async { done(d) } }
+    }
+
+    public var configURL: URL? { system?.paths.config }
+
+    /// Shows config.yaml selected in Finder.
+    public func revealConfig() {
+        guard let u = configURL else { return }
+        NSWorkspace.shared.activateFileViewerSelecting([u])
+    }
+
+    public static var version: String {
+        (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String) ?? "разработческая сборка"
+    }
+
+    /// Lines for the windows, in order: config error (red), autostart error (red), notice (neutral).
+    public var messages: [(text: String, isError: Bool)] {
+        var out: [(text: String, isError: Bool)] = []
+        if let e = configError { out.append((e, true)) }
+        if let e = autostartError { out.append((e, true)) }
+        if let n = notice { out.append((n, false)) }
+        return out
     }
 
     public func quit() { NSApp.terminate(nil) }
@@ -100,17 +154,23 @@ public final class AppState: ObservableObject {
         if changed, let n = tracker.update(s.state) { notifier.post(n) }
     }
 
-    private func receive(_ c: Config) {
+    /// A new config (hot reload, own change, or the in-memory one after a failed save). Clears no
+    /// message: a failed save is followed by this very call.
+    func receiveConfig(_ c: Config) {
         config = c
         theme.update(config: c)
-        lastError = nil
         rebuildShownApps()
     }
 
-    private func reportConfigError(_ e: String) {
-        lastError = e
+    func receiveConfigError(_ e: String) {
+        configError = e
         notifier.post(.configError(e))
     }
+
+    /// config.yaml loaded or saved fine again.
+    func configHealthy() { configError = nil }
+
+    func receiveNotice(_ n: String) { notice = n }
 
     private func rebuildShownApps() {
         var out: [String] = []

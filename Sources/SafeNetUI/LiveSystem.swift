@@ -13,12 +13,15 @@ public final class LiveSystem {
     public var onStatus: ((EngineStatus) -> Void)?
     public var onConfig: ((Config) -> Void)?
     public var onConfigError: ((String) -> Void)?
+    public var onConfigHealthy: (() -> Void)?
     public var onNotice: ((String) -> Void)?
     /// Test mode without SAFENET_CONFIG_DIR: settings are not saved (the real config stays clean).
     public let configReadOnly: Bool
     public static let readOnlyMessage = "Тестовый режим: настройки не сохраняются"
 
     private var monitor: NetworkMonitor?
+    /// Deep check ("Проверка" tab): the same endpoints the engine uses, nothing else.
+    private let deepRunner: (@escaping (DeepCheckData) -> Void) -> Void
     private let watchdog: WatchdogLauncher
     private var signalSources: [DispatchSourceSignal] = []
     private var observers: [NSObjectProtocol] = []
@@ -40,6 +43,8 @@ public final class LiveSystem {
             s.online = s.interface != nil          // no default route = offline (never assume online)
             return s
         }
+        let deep: (@escaping (DeepCheckData) -> Void) -> Void
+        let resolversNow: () -> [DNSResolver]? = { currentDNSResolvers(runner: runner) }
         if let t = testMode {
             NSLog("SafeNet: TEST MODE (SAFENET_FAKE_IP=%@, offline=%@)",
                   t.fakeAnswer.map { "\($0.ip),\($0.country)" } ?? "-", t.offline ? "yes" : "no")
@@ -54,6 +59,18 @@ public final class LiveSystem {
             if off {
                 snapshotNow = { NetSnapshot(online: false, hasTunnel: false, gatewayIP: nil, gatewayMAC: nil, proxy: nil) }
             }
+            let snapFn = snapshotNow
+            deep = { cb in
+                DispatchQueue.global().async {
+                    let r: ServiceResult.Outcome = off || ans == nil ? .failed("test mode offline") : .answer(ans!)
+                    let svc = (1...4).map { ServiceResult(service: "тестовый сервис \($0)", outcome: r) }
+                    let routes = URLSessionTraceFetcher.hosts.map {
+                        RouteResult(host: $0, ip: ans?.ip, country: ans?.country, error: off || ans == nil ? "test mode offline" : nil)
+                    }
+                    cb(DeepCheckData(services: svc, ipv6: ServiceResult(service: "тестовый IPv6", outcome: .failed("test mode")),
+                                     routes: routes, resolvers: resolversNow(), snapshot: snapFn(), finished: Date()))
+                }
+            }
         } else {
             // Services are created once and reused (each HTTPIPService owns a URLSession).
             let services: [IPService] = (HTTPIPService.defaults + [HTTPIPService.ipv6Only]).map { HTTPIPService(spec: $0) }
@@ -61,10 +78,24 @@ public final class LiveSystem {
             fetch = { cb in Task { let a = await checker.check(); q.async { cb(a) } } }
             let rp = RouteProbe()
             probe = { hosts, cb in Task { let r = await rp.check(hosts: hosts); q.async { cb(r) } } }
+            let v4 = IPChecker(services: Array(services.dropLast()), timeout: 6)
+            let v6 = IPChecker(services: [services.last!], timeout: 6)
+            let snapFn = snapshotNow
+            deep = { cb in
+                Task.detached {
+                    async let each = v4.checkEach()
+                    async let six = v6.checkEach()
+                    async let routes = rp.check(hosts: URLSessionTraceFetcher.hosts)
+                    let resolvers = resolversNow(), snap = snapFn()
+                    cb(DeepCheckData(services: await each, ipv6: await six.first, routes: await routes,
+                                     resolvers: resolvers, snapshot: snap, finished: Date()))
+                }
+            }
         }
         let deps = EngineDeps(clock: SystemClock(queue: q), freezer: freezer, log: EventLog(url: paths.events),
                               store: ConfigStore(url: paths.config), fetchAnswers: fetch, probeRoutes: probe,
-                              resolvers: { currentDNSResolvers(runner: runner) }, snapshotNow: snapshotNow, queue: q)
+                              resolvers: resolversNow, snapshotNow: snapshotNow, queue: q)
+        deepRunner = deep
         var d = deps
         if configReadOnly {
             d.configWritesBlocked = LiveSystem.readOnlyMessage
@@ -87,6 +118,7 @@ public final class LiveSystem {
         engine.onConfig = { [weak self] c in DispatchQueue.main.async { self?.onConfig?(c) } }
         engine.onConfigError = { [weak self] e in DispatchQueue.main.async { self?.onConfigError?(e) } }
         engine.onNotice = { [weak self] e in DispatchQueue.main.async { self?.onNotice?(e) } }
+        engine.onConfigHealthy = { [weak self] in DispatchQueue.main.async { self?.onConfigHealthy?() } }
         queue.async { [weak self] in
             guard let self = self else { return }
             self.engine.start()
@@ -100,6 +132,10 @@ public final class LiveSystem {
             self?.queue.async { self?.engine.didWake(); self?.monitor?.refresh() }
         })
     }
+
+    /// Deep check on demand (IP services one by one, IPv6, DNS, route to the AI hosts). Calls back
+    /// on a background queue.
+    public func deepCheck(_ done: @escaping (DeepCheckData) -> Void) { deepRunner(done) }
 
     /// Runs `body` on the engine queue (UI actions).
     public func perform(_ body: @escaping (Engine) -> Void) {

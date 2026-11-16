@@ -39,6 +39,10 @@ public struct EngineDeps {
     public var queue: DispatchQueue?
     public var tickInterval: TimeInterval = 1
     public var routeInterval: TimeInterval = 120
+    /// Non-nil: nothing is written to disk (test mode without SAFENET_CONFIG_DIR would otherwise
+    /// put the fake IP/country into the user's real config.yaml). Changes still apply in memory;
+    /// the message is reported through `onNotice`.
+    public var configWritesBlocked: String?
 
     public init(clock: Clock, freezer: Freezer, log: EventLog, store: ConfigStore,
                 fetchAnswers: @escaping (@escaping ([IPAnswer]) -> Void) -> Void,
@@ -69,6 +73,8 @@ public final class Engine {
     public var onStatus: ((EngineStatus) -> Void)?
     public var onConfig: ((Config) -> Void)?
     public var onConfigError: ((String) -> Void)?
+    /// Informational message for the window (no notification), e.g. a refused write in test mode.
+    public var onNotice: ((String) -> Void)?
 
     private let deps: EngineDeps
     private var snapshot: NetSnapshot?
@@ -90,23 +96,57 @@ public final class Engine {
     public init(deps: EngineDeps) {
         self.deps = deps
         var err: String?
-        config = Engine.loadOrCreate(deps.store, error: &err)
+        config = Engine.loadOrCreate(deps.store, writesBlocked: deps.configWritesBlocked != nil, error: &err)
         startupError = err
         guardian = Guard(config: config, freezer: deps.freezer, clock: deps.clock, log: deps.log)
         guardian.callbackQueue = deps.queue
     }
 
-    /// Missing file -> defaults written to disk. Broken file -> defaults in memory (nothing is
-    /// protected, file left untouched for the user to fix) and an error.
-    static func loadOrCreate(_ store: ConfigStore, error: inout String?) -> Config {
+    /// Last config that loaded and validated, kept next to config.yaml. Used at launch when
+    /// config.yaml is broken (the spec's "работа на старых настройках" needs something old).
+    static func lastGoodStore(_ store: ConfigStore) -> ConfigStore {
+        ConfigStore(url: store.url.deletingLastPathComponent().appendingPathComponent("config.last-good.yaml"))
+    }
+
+    /// - missing file: defaults, written to disk (first run);
+    /// - valid file: used, and copied to the last-good file;
+    /// - broken / empty file: the last-good copy, else defaults (nothing protected) with a
+    ///   prominent error. The broken file is NEVER overwritten: the user fixes it.
+    static func loadOrCreate(_ store: ConfigStore, writesBlocked: Bool, error: inout String?) -> Config {
         if !FileManager.default.fileExists(atPath: store.url.path) {
-            do { try store.save(.default) } catch let e { error = "не удалось создать config.yaml: \(e)" }
+            if !writesBlocked {
+                do { try store.save(.default) } catch let e { error = "не удалось создать config.yaml (\(safeDescription(e)))" }
+            }
             return .default
         }
-        do { return try store.load() } catch let e {
-            error = "\(e)"
+        do {
+            let c = try store.load()
+            if !writesBlocked { saveLastGood(c, store) }
+            return c
+        } catch let e {
+            let why = safeDescription(e)
+            let lg = lastGoodStore(store)            // load() of a missing file returns defaults: check first
+            if FileManager.default.fileExists(atPath: lg.url.path), let c = try? lg.load() {
+                error = "config.yaml не загружен (\(why)). Используются прежние настройки из config.last-good.yaml; исправьте файл."
+                return c
+            }
+            error = "config.yaml не загружен (\(why)), прежних настроек нет: ничего не защищено до исправления файла!"
             return .default
         }
+    }
+
+    static func saveLastGood(_ c: Config, _ store: ConfigStore) {
+        try? lastGoodStore(store).save(c)          // atomic; best effort
+    }
+
+    /// Error text safe for the UI and notifications: config/YAML errors as they are (they hold
+    /// no paths), anything else only as domain + code (Cocoa errors embed the file path and
+    /// thereby the user name).
+    public static func safeDescription(_ e: Error) -> String {
+        if let c = e as? ConfigError { return c.description }
+        if let y = e as? YAMLError { return y.description }
+        let n = e as NSError
+        return "ошибка \(n.domain) \(n.code)"
     }
 
     // MARK: Lifecycle
@@ -128,8 +168,13 @@ public final class Engine {
         if watchConfig {
             deps.store.watch(queue: deps.queue ?? DispatchQueue(label: "safenet.engine.config")) { [weak self] r in
                 switch r {
-                case .success(let c): self?.apply(config: c)
-                case .failure(let e): self?.onConfigError?("\(e)")
+                case .success(let c):
+                    guard let self = self, self.running else { return }
+                    if self.deps.configWritesBlocked == nil { Engine.saveLastGood(c, self.deps.store) }
+                    self.apply(config: c)
+                case .failure(let e):
+                    guard let self = self, self.running else { return }
+                    self.onConfigError?("config.yaml не загружен (\(Engine.safeDescription(e))). Работаю на прежних настройках.")
                 }
             }
         }
@@ -219,13 +264,26 @@ public final class Engine {
 
     // MARK: Actions
 
+    /// No-op after `shutdown()` (a queued action must not re-protect / re-freeze while exiting).
     public func updateConfig(_ mutate: (inout Config) -> Void) {
+        guard running else { return }
         var c = config
         mutate(&c)
         guard c != config else { return }
-        do { try deps.store.save(c) } catch { onConfigError?("не удалось сохранить config.yaml: \(error)") }
+        if let msg = deps.configWritesBlocked {
+            onNotice?(msg)
+        } else {
+            do {
+                try deps.store.save(c)
+                Engine.saveLastGood(c, deps.store)
+            } catch {
+                onConfigError?("не удалось сохранить config.yaml (\(Engine.safeDescription(error)))")
+            }
+        }
         apply(config: c)
     }
+
+    public var isRunning: Bool { running }
 
     /// First run: allow the country of the currently confirmed IP. False when nothing is confirmed.
     @discardableResult
@@ -242,6 +300,7 @@ public final class Engine {
     }
 
     private func apply(config c: Config) {
+        guard running else { return }
         let oldInterval = config.checkInterval
         let wasActive = routesActive
         config = c

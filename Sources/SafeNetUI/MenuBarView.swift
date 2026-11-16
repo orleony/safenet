@@ -39,6 +39,13 @@ public struct MenuBarView: View {
     private var notices: some View {
         let p = theme.palette
         return VStack(alignment: .leading, spacing: theme.spacing) {
+            if model.testMode != nil {
+                Text(model.configReadOnly
+                     ? "Подставной IP вместо проверки. Настройки не сохраняются."
+                     : "Подставной IP вместо проверки (SAFENET_FAKE_IP).")
+                    .font(theme.font(11, weight: .medium)).foregroundColor(p.frozen.swiftUIColor)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             ForEach(warnings, id: \.self) { w in
                 Label(w, systemImage: "exclamationmark.triangle")
                     .font(theme.font(11)).foregroundColor(p.frozen.swiftUIColor)

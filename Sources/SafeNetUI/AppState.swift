@@ -17,6 +17,8 @@ public final class AppState: ObservableObject {
     @Published public private(set) var shownApps: [String] = []
 
     public let testMode: TestMode?
+    /// Test mode without SAFENET_CONFIG_DIR: nothing is saved (shown in the window).
+    public private(set) var configReadOnly = false
     public let appearance: SystemAppearance
     public let theme: Theme
 
@@ -41,6 +43,8 @@ public final class AppState: ObservableObject {
         system.onStatus = { [weak self] s in self?.receive(s) }
         system.onConfig = { [weak self] c in self?.receive(c) }
         system.onConfigError = { [weak self] e in self?.reportConfigError(e) }
+        system.onNotice = { [weak self] e in self?.lastError = e }
+        configReadOnly = system.configReadOnly
     }
 
     /// Static instance for previews / UI tests (no engine).
@@ -82,7 +86,7 @@ public final class AppState: ObservableObject {
     public func checkNow() { system?.perform { $0.checkNow() } }
 
     public func setAutostart(_ on: Bool) {
-        do { try Autostart.set(on); lastError = nil } catch { lastError = "Автозапуск: \(error)" }
+        do { try Autostart.set(on); lastError = nil } catch { lastError = "Автозапуск: \((error as? Autostart.Unavailable)?.description ?? Engine.safeDescription(error))" }
         autostartEnabled = Autostart.isEnabled
     }
 
@@ -104,7 +108,7 @@ public final class AppState: ObservableObject {
     }
 
     private func reportConfigError(_ e: String) {
-        lastError = "Ошибка config.yaml: \(e). Работаю на прежних настройках."
+        lastError = e
         notifier.post(.configError(e))
     }
 

@@ -32,7 +32,7 @@ public struct NoticeText: Equatable {
     public init(title: String, body: String) { self.title = title; self.body = body }
 
     public static func configError(_ message: String) -> NoticeText {
-        NoticeText(title: "SafeNet: ошибка в config.yaml", body: "Работаю на прежних настройках. \(message)")
+        NoticeText(title: "SafeNet: ошибка в config.yaml", body: message)
     }
 }
 

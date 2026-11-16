@@ -47,12 +47,24 @@ private final class ERig {
     var engine: Engine!
     var errors: [String] = []
 
-    init(config: Config?) {
+    var notices: [String] = []
+    /// Test mode without SAFENET_CONFIG_DIR: disk writes refused with this message.
+    var writesBlocked: String?
+
+    init(config: Config?, writesBlocked: String? = nil) {
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         store = ConfigStore(url: dir.appendingPathComponent("config.yaml"))
         if let c = config { try! store.save(c) }
         freezer = Freezer(table: table, signaler: sig, journal: dir.appendingPathComponent("frozen.json"),
                           selfPID: 7, myUID: me, pollInterval: 0.01)
+        self.writesBlocked = writesBlocked
+        rebuild()
+    }
+
+    var lastGood: URL { dir.appendingPathComponent("config.last-good.yaml") }
+
+    /// (Re)creates the engine on the same directory (simulates a relaunch).
+    func rebuild() {
         var deps = EngineDeps(
             clock: clock, freezer: freezer, log: EventLog(url: dir.appendingPathComponent("events.jsonl")), store: store,
             fetchAnswers: { [unowned self] cb in
@@ -64,10 +76,15 @@ private final class ERig {
             resolvers: { [DNSResolver(address: "10.8.0.1", interface: "utun3", scoped: false)] },
             snapshotNow: { online }, queue: nil)
         deps.tickInterval = 1
+        deps.configWritesBlocked = writesBlocked
         engine = Engine(deps: deps)
         engine.onConfigError = { [unowned self] in self.errors.append($0) }
+        engine.onNotice = { [unowned self] in self.notices.append($0) }
     }
-    deinit { try? FileManager.default.removeItem(at: dir) }
+    deinit {
+        try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: dir.path)
+        try? FileManager.default.removeItem(at: dir)
+    }
     /// Delivers the held fetch; later fetches stay held while `holdFetch` is true.
     func release() { let cb = held; held = nil; cb?() }
 }
@@ -264,5 +281,108 @@ func registerEngineTests() {
         let u = Engine.leakAllow(c)
         expectEqual(Set(u.countries), ["NL", "US"])
         expectEqual(u.ips, ["1.1.1.1"])
+    }
+
+    // MARK: Fix round 1
+
+    test("testBrokenConfigAtLaunchUsesLastGood") {
+        let r = ERig(config: cfg())                  // successful load at init writes last-good
+        expect(FileManager.default.fileExists(atPath: r.lastGood.path), "last-good written after a successful load")
+        let broken = "apps: [telegram\n  bad: : :\n"
+        try broken.write(to: r.store.url, atomically: true, encoding: .utf8)
+        r.rebuild()
+        r.engine.start(watchConfig: false)
+        expectEqual(r.engine.config.apps, ["telegram"], "previous settings in use")
+        expectEqual(r.engine.config.allow.countries, ["NL"])
+        expectEqual(r.errors.count, 1, "error flagged: \(r.errors)")
+        expect(r.errors.first?.contains("прежние") == true, "\(r.errors)")
+        try expectEqual(String(contentsOf: r.store.url, encoding: .utf8), broken, "broken file left for the user")
+        expectEqual(r.engine.guardian.frozenApps, ["telegram"], "protected again (RU not allowed)")
+    }
+
+    test("testEmptyConfigAtLaunchUsesLastGood") {
+        let r = ERig(config: cfg())
+        try "".write(to: r.store.url, atomically: true, encoding: .utf8)
+        r.rebuild()
+        r.engine.start(watchConfig: false)
+        expectEqual(r.engine.config.apps, ["telegram"])
+        expectEqual(r.errors.count, 1)
+        try expectEqual(String(contentsOf: r.store.url, encoding: .utf8), "")
+    }
+
+    test("testBrokenConfigWithoutLastGoodUsesDefaultsWithError") {
+        let r = ERig(config: nil)
+        try? FileManager.default.removeItem(at: r.lastGood)
+        try "grace: [\n".write(to: r.store.url, atomically: true, encoding: .utf8)
+        r.rebuild()
+        r.engine.start(watchConfig: false)
+        expectEqual(r.engine.config, Config.default)
+        expectEqual(r.errors.count, 1)
+        expect(r.errors.first?.contains("не защищено") == true, "prominent error: \(r.errors)")
+        try expectEqual(String(contentsOf: r.store.url, encoding: .utf8), "grace: [\n", "never overwritten")
+        expect(!FileManager.default.fileExists(atPath: r.lastGood.path), "defaults are not 'last good'")
+    }
+
+    test("testLastGoodWrittenAfterSave") {
+        let r = ERig(config: cfg())
+        r.engine.start(watchConfig: false)
+        r.engine.toggleApp("chatgpt")
+        let lg = try ConfigStore(url: r.lastGood).load()
+        expectEqual(lg.apps, ["telegram", "chatgpt"])
+    }
+
+    test("testNothingRefreezesAfterShutdown") {
+        let r = ERig(config: cfg())
+        r.engine.start(watchConfig: false)
+        expectEqual(r.freezer.frozenPIDs, [100])
+        r.engine.shutdown(deadline: 0)
+        let stops = r.sig.pids(SIGSTOP).count
+        r.engine.updateConfig { $0.apps = ["telegram"]; $0.grace = 5 }
+        r.engine.toggleApp("chatgpt")
+        r.engine.guardian.allowCurrentIP()
+        _ = r.engine.allowCurrentCountry()
+        r.engine.checkNow()
+        r.clock.advance(by: 100)
+        expectEqual(r.freezer.frozenPIDs, [], "nothing frozen after shutdown")
+        expectEqual(r.sig.pids(SIGSTOP).count, stops)
+        expectEqual(r.sig.pids(SIGTERM), [])
+        try expectEqual(r.store.load().apps, ["telegram"], "no config writes after shutdown")
+        try expectEqual(r.store.load().grace, 20)
+    }
+
+    test("testTestModeRefusesConfigWrites") {
+        let r = ERig(config: cfg(), writesBlocked: "тестовый режим: настройки не сохраняются")
+        let before = try String(contentsOf: r.store.url, encoding: .utf8)
+        r.engine.start(watchConfig: false)
+        r.engine.guardian.allowCurrentIP()
+        try expectEqual(String(contentsOf: r.store.url, encoding: .utf8), before, "real config untouched")
+        expect(!FileManager.default.fileExists(atPath: r.lastGood.path), "no last-good write either")
+        expectEqual(r.notices.last, "тестовый режим: настройки не сохраняются")
+        expectEqual(r.engine.config.allow.ips, ["5.6.7.8"], "applied in memory for the demo")
+    }
+
+    test("testTestModeDoesNotCreateConfigFile") {
+        let r = ERig(config: nil, writesBlocked: "тестовый режим: настройки не сохраняются")
+        expect(!FileManager.default.fileExists(atPath: r.store.url.path))
+    }
+
+    test("testErrorTextsHaveNoPaths") {
+        let home = NSHomeDirectory(), user = NSUserName()
+        let e = NSError(domain: NSCocoaErrorDomain, code: 513,
+                        userInfo: [NSFilePathErrorKey: home + "/Library/Application Support/SafeNet/config.yaml",
+                                   NSLocalizedDescriptionKey: "You don’t have permission to save “config.yaml” in \(home)"])
+        let t = Engine.safeDescription(e)
+        expect(!t.contains(home) && !t.contains(user) && !t.contains("/"), t)
+        // Real failure: the config directory becomes read-only, then a save fails.
+        let r = ERig(config: cfg())
+        r.engine.start(watchConfig: false)
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: r.dir.path)
+        r.engine.toggleApp("chatgpt")
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: r.dir.path)
+        expectEqual(r.errors.count, 1, "\(r.errors)")
+        for m in r.errors + r.notices {
+            expect(!m.contains(home) && !m.contains(user) && !m.contains(r.dir.path) && !m.contains("/"), m)
+            expect(!NoticeText.configError(m).body.contains(home))
+        }
     }
 }

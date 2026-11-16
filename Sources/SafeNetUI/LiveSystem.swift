@@ -13,6 +13,10 @@ public final class LiveSystem {
     public var onStatus: ((EngineStatus) -> Void)?
     public var onConfig: ((Config) -> Void)?
     public var onConfigError: ((String) -> Void)?
+    public var onNotice: ((String) -> Void)?
+    /// Test mode without SAFENET_CONFIG_DIR: settings are not saved (the real config stays clean).
+    public let configReadOnly: Bool
+    public static let readOnlyMessage = "Тестовый режим: настройки не сохраняются"
 
     private var monitor: NetworkMonitor?
     private let watchdog: WatchdogLauncher
@@ -24,6 +28,7 @@ public final class LiveSystem {
         paths = AppPaths.from(environment: env)
         paths.createDirectory()
         testMode = TestMode.from(environment: env)
+        configReadOnly = testMode != nil && (env["SAFENET_CONFIG_DIR"] ?? "").isEmpty
         let q = queue
         let freezer = Freezer(table: SystemProcessTable(), signaler: KillSignaler(), journal: paths.journal)
         let fetch: (@escaping ([IPAnswer]) -> Void) -> Void
@@ -60,7 +65,12 @@ public final class LiveSystem {
         let deps = EngineDeps(clock: SystemClock(queue: q), freezer: freezer, log: EventLog(url: paths.events),
                               store: ConfigStore(url: paths.config), fetchAnswers: fetch, probeRoutes: probe,
                               resolvers: { currentDNSResolvers(runner: runner) }, snapshotNow: snapshotNow, queue: q)
-        engine = Engine(deps: deps)
+        var d = deps
+        if configReadOnly {
+            d.configWritesBlocked = LiveSystem.readOnlyMessage
+            NSLog("SafeNet: TEST MODE without SAFENET_CONFIG_DIR: config.yaml is read-only for this run")
+        }
+        engine = Engine(deps: d)
         watchdog = WatchdogLauncher(journal: paths.journal)
 
         let offlineSource: ((Bool) -> NetSnapshot)? = testMode?.offline == true ? { _ in snapshotNow() } : nil
@@ -76,6 +86,7 @@ public final class LiveSystem {
         engine.onStatus = { [weak self] s in DispatchQueue.main.async { self?.onStatus?(s) } }
         engine.onConfig = { [weak self] c in DispatchQueue.main.async { self?.onConfig?(c) } }
         engine.onConfigError = { [weak self] e in DispatchQueue.main.async { self?.onConfigError?(e) } }
+        engine.onNotice = { [weak self] e in DispatchQueue.main.async { self?.onNotice?(e) } }
         queue.async { [weak self] in
             guard let self = self else { return }
             self.engine.start()
@@ -92,7 +103,8 @@ public final class LiveSystem {
 
     /// Runs `body` on the engine queue (UI actions).
     public func perform(_ body: @escaping (Engine) -> Void) {
-        queue.async { [weak self] in if let e = self?.engine { body(e) } }
+        // Dropped after shutdown: a queued action must not re-protect / re-freeze while exiting.
+        queue.async { [weak self] in if let e = self?.engine, e.isRunning { body(e) } }
     }
 
     /// Main thread. Idempotent. Resumes every frozen process before returning.

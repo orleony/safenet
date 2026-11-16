@@ -15,7 +15,7 @@ import Foundation
 ///                        and has not had a passing check since; date = latest close;
 ///  4. `.ok`              everything else, including apps released by `on_timeout: resume`
 ///                        (see `releasedApps`).
-/// `deadline` is a display value (wall clock = now + remaining monotonic time).
+/// `deadline` is a display value (wall clock = now + remaining monotonic time, rounded to whole seconds).
 public enum GuardState: Equatable {
     case ok
     case frozen(since: Date, reason: Reason, deadline: Date?)
@@ -498,7 +498,11 @@ public final class Guard {
             let timed = fr.filter { $0.deadline != nil }
             let lead = timed.min(by: { $0.deadline! < $1.deadline! }) ?? first
             let reason: Reason = fr.contains { $0.freezeFailed } ? .freezeFailed : lead.reason
-            let shown = lead.deadline.map { clock.now.addingTimeInterval($0 - clock.uptime) }
+            // Rounded to whole seconds: `now` and `uptime` are read separately, so the raw value
+            // jitters by microseconds and would publish a "change" on every tick.
+            let shown = lead.deadline.map {
+                Date(timeIntervalSince1970: clock.now.addingTimeInterval($0 - clock.uptime).timeIntervalSince1970.rounded())
+            }
             return .frozen(since: first.since, reason: reason, deadline: shown)
         }
         if let c = apps.values.filter({ $0.phase == .closed }).compactMap({ $0.closedAt }).max() { return .closed(c) }

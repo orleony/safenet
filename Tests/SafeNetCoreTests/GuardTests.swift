@@ -704,4 +704,35 @@ func registerGuardTests() {
         expectEqual(fired, [1, 2, 5])
         expectEqual(clock.pendingCount, 0)
     }
+
+    test("testDisplayedDeadlineIsWholeSecondsAndStable") {
+        // Real clocks read `now` and `uptime` separately: the displayed deadline jitters by
+        // microseconds. It must be rounded so onChange does not fire on every tick.
+        let base = FakeClock(start: Date(timeIntervalSince1970: 1_800_000_000.25))
+        let clock = JitterClock(base)
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("safenet-guard-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let table = GTable([gproc(100, "Claude")])
+        let f = Freezer(table: table, signaler: GSignaler(), journal: dir.appendingPathComponent("frozen.json"),
+                        selfPID: fakeSelf, myUID: me, pollInterval: 0.01)
+        let g = Guard(config: baseConfig(), freezer: f, clock: clock, log: EventLog(url: dir.appendingPathComponent("e.jsonl")))
+        var changes = 0
+        g.onChange = { _ in changes += 1 }
+        g.apply(bad)
+        let first = changes
+        guard case .frozen(_, _, let d?) = g.state else { expect(false, "not frozen: \(g.state)"); return }
+        expectEqual(d.timeIntervalSince1970, d.timeIntervalSince1970.rounded(), "deadline must be whole seconds")
+        for _ in 0..<5 { g.tick(); g.apply(bad) }
+        expectEqual(changes, first, "jitter must not publish changes")
+    }
+}
+
+/// Clock whose wall time drifts by a few microseconds on every read (like Date() vs systemUptime).
+private final class JitterClock: Clock {
+    let base: FakeClock
+    private var n = 0.0
+    init(_ b: FakeClock) { base = b }
+    var now: Date { n += 1; return base.now.addingTimeInterval(n * 0.000_003) }
+    var uptime: TimeInterval { base.uptime }
+    func schedule(after: TimeInterval, _ f: @escaping () -> Void) -> Cancellable { base.schedule(after: after, f) }
 }

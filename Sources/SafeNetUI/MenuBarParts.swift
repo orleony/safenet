@@ -140,21 +140,22 @@ struct FrozenCard: View {
                 Text(reason == .offline ? "Без сети приложения не закрываются" : "Ждёт следующей проверки")
                     .font(theme.font(11)).foregroundColor(p.muted.swiftUIColor)
             }
+            Button("Разрешить этот IP") { model.allowCurrent() }
+                .buttonStyle(SNButtonStyle(kind: .secondary, theme: theme))
+                .disabled(model.lastIP == nil)
             HStack(spacing: 6) {
-                Button("Разрешить этот IP") { model.allowCurrent() }
-                    .buttonStyle(SNButtonStyle(kind: .secondary, theme: theme))
-                    .disabled(model.lastIP == nil)
                 Button("Продлить") { model.extend(by: 60) }
                     .buttonStyle(SNButtonStyle(kind: .secondary, theme: theme))
                     .disabled(deadline == nil)
-            }
-            Button(confirmClose ? "Точно закрыть? Нажмите ещё раз" : "Закрыть сейчас") {
-                if confirmClose { confirmClose = false; model.closeNow() } else {
-                    confirmClose = true
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 4) { confirmClose = false }
+                // Destructive: inline two-step confirmation (dialogs are unreliable in a menu window).
+                Button(confirmClose ? "Точно закрыть?" : "Закрыть сейчас") {
+                    if confirmClose { confirmClose = false; model.closeNow() } else {
+                        confirmClose = true
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 4) { confirmClose = false }
+                    }
                 }
+                .buttonStyle(SNButtonStyle(kind: .danger, theme: theme))
             }
-            .buttonStyle(SNButtonStyle(kind: .danger, theme: theme))
         }
         .padding(10)
         .background(RoundedRectangle(cornerRadius: Metrics.cornerRadius).fill(p.surface.swiftUIColor))

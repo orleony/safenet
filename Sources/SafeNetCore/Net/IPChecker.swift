@@ -119,6 +119,11 @@ public struct HTTPIPService: IPService {
         Spec(url: URL(string: "https://api.country.is/")!, ipField: "ip", countryField: "country"),
     ]
 
+    /// IPv6-only endpoint (AAAA record only, no A record; same JSON as v4.ident.me: "ip", "cc"):
+    /// answers only when IPv6 traffic actually gets out, which is what IPv6 leak detection needs.
+    /// On a network without IPv6 it simply fails and contributes no answer.
+    public static let ipv6Only = Spec(url: URL(string: "https://v6.ident.me/json")!, ipField: "ip", countryField: "cc")
+
     public let spec: Spec
     public let requestTimeout: TimeInterval
     private let session: URLSession
@@ -160,7 +165,7 @@ public struct HTTPIPService: IPService {
         return IPAnswer(ip: ip, country: cc)
     }
 
-    static func isValidIP(_ s: String) -> Bool {
+    public static func isValidIP(_ s: String) -> Bool {
         var v4 = in_addr(), v6 = in6_addr()
         return inet_pton(AF_INET, s, &v4) == 1 || inet_pton(AF_INET6, s, &v6) == 1
     }

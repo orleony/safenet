@@ -2,6 +2,6 @@
 
 func registerUITests() {
     test("testUIModuleLinks") {
-        expectEqual(SafeNetUIInfo.moduleName, "SafeNetUI")
+        expectEqual(Metrics.hairlineWidth, 1)
     }
 }

@@ -275,16 +275,35 @@ public final class Engine {
 
     // MARK: Actions
 
+    /// What `updateConfig` did with the change (the CLI reports it; the UI learns the same through
+    /// `onNotice` / `onConfigError`).
+    public enum UpdateResult: Equatable {
+        /// Engine stopped or the mutation changed nothing.
+        case unchanged
+        /// Written to config.yaml and in effect.
+        case saved
+        /// Test mode without SAFENET_CONFIG_DIR: nothing written; the change is in effect until exit.
+        case refused(String)
+        /// The file could not be written (or the broken file could not be backed up first): in effect
+        /// until restart only.
+        case notSaved(String)
+    }
+
     /// No-op after `shutdown()` (a queued action must not re-protect / re-freeze while exiting).
-    public func updateConfig(_ mutate: (inout Config) -> Void) {
-        guard running else { return }
+    @discardableResult
+    public func updateConfig(_ mutate: (inout Config) -> Void) -> UpdateResult {
+        guard running else { return .unchanged }
         var c = config
         mutate(&c)
-        guard c != config else { return }
+        guard c != config else { return .unchanged }
+        var result = UpdateResult.saved
         if let msg = deps.configWritesBlocked {
             onNotice?(msg)
+            result = .refused(msg)
         } else if fileBroken && !backupBrokenFile() {
-            onConfigError?("config.yaml с ошибкой не перезаписан: не удалось сохранить его копию. Изменение действует до перезапуска.")
+            let m = "config.yaml с ошибкой не перезаписан: не удалось сохранить его копию. Изменение действует до перезапуска."
+            onConfigError?(m)
+            result = .notSaved(m)
         } else {
             do {
                 try deps.store.save(c)
@@ -292,10 +311,13 @@ public final class Engine {
                 Engine.saveLastGood(c, deps.store)
                 onConfigHealthy?()
             } catch {
-                onConfigError?("не удалось сохранить config.yaml (\(Engine.safeDescription(error)))")
+                let m = "не удалось сохранить config.yaml (\(Engine.safeDescription(error)))"
+                onConfigError?(m)
+                result = .notSaved(m)
             }
         }
         apply(config: c)
+        return result
     }
 
     public var isRunning: Bool { running }

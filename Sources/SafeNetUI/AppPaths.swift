@@ -12,6 +12,27 @@ public struct AppPaths: Equatable {
 
     public init(dir: URL) { self.dir = dir }
 
+    /// Longest usable unix-socket path (sun_path is 104 bytes on macOS, including the NUL).
+    public static let maxSocketPath = 103
+
+    /// The CLI socket: `<dir>/safenet.sock` (same directory logic as the config, so a test
+    /// `SAFENET_CONFIG_DIR` never shares a socket with the real app). When that path would not
+    /// fit into sun_path, a short per-user fallback `<tmp>/safenet-<uid>/<hash of dir>.sock` is used
+    /// (the server creates that directory 0700 and refuses one it does not own). Server and client
+    /// compute the same path from the same environment.
+    public var socketPath: String { socketPath(tempDir: NSTemporaryDirectory()) }
+
+    func socketPath(tempDir: String) -> String {
+        let direct = dir.appendingPathComponent("safenet.sock").path
+        if direct.utf8.count <= AppPaths.maxSocketPath { return direct }
+        var h: UInt64 = 0xcbf29ce484222325                       // FNV-1a of the directory path
+        for b in dir.path.utf8 { h = (h ^ UInt64(b)) &* 0x100000001b3 }
+        let name = "safenet-\(getuid())"
+        let file = String(format: "%016llx.sock", h)
+        let tmp = (tempDir as NSString).appendingPathComponent(name) + "/" + file
+        return tmp.utf8.count <= AppPaths.maxSocketPath ? tmp : "/tmp/\(name)/\(file)"
+    }
+
     public static func from(environment env: [String: String]) -> AppPaths {
         if let d = env["SAFENET_CONFIG_DIR"], !d.isEmpty {
             return AppPaths(dir: URL(fileURLWithPath: (d as NSString).expandingTildeInPath, isDirectory: true))

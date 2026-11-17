@@ -63,8 +63,13 @@ public struct SafeNetMenuApp: App {
 /// symbol is also shown next to the text whenever protection is not plainly "ok".
 struct MenuBarLabel: View {
     @ObservedObject var model: AppState
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
+        labelContent.onAppear { PanelOpener.register(openWindow) }
+    }
+
+    @ViewBuilder private var labelContent: some View {
         let symbol = Format.stateSymbol(model.state)
         if let t = Format.menuTitle(model.config.menubar, confirmed: model.lastIP) {
             if case .ok = model.state {

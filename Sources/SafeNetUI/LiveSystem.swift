@@ -26,6 +26,7 @@ public final class LiveSystem {
     private var signalSources: [DispatchSourceSignal] = []
     private var observers: [NSObjectProtocol] = []
     private var stopped = false
+    private var ipc: IPCServer?
 
     public init(environment env: [String: String] = ProcessInfo.processInfo.environment) {
         paths = AppPaths.from(environment: env)
@@ -124,6 +125,7 @@ public final class LiveSystem {
             self.engine.start()
             self.monitor?.start()
         }
+        startIPC()
         let nc = NSWorkspace.shared.notificationCenter
         observers.append(nc.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: nil) { [weak self] _ in
             self?.queue.async { self?.engine.willSleep() }
@@ -131,6 +133,24 @@ public final class LiveSystem {
         observers.append(nc.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: nil) { [weak self] _ in
             self?.queue.async { self?.engine.didWake(); self?.monitor?.refresh() }
         })
+    }
+
+    /// CLI socket (`SafeNetApp status`, ...). A failure only costs the CLI: protection goes on.
+    private func startIPC() {
+        let service = CLIService(
+            perform: { [weak self] body in self?.perform(body) }, paths: paths, testMode: testMode,
+            configReadOnly: configReadOnly,
+            openPanel: { done in DispatchQueue.main.async { done(PanelOpener.openFromCLI()) } },
+            version: AppState.version)
+        let path = paths.socketPath
+        let server = IPCServer(path: path, strictDirectory: path != paths.dir.appendingPathComponent("safenet.sock").path,
+                               handler: { service.handle($0, reply: $1) })
+        do {
+            try server.start()
+            ipc = server
+        } catch {
+            NSLog("SafeNet: CLI socket not started: %@", "\(error)")
+        }
     }
 
     /// Deep check on demand (IP services one by one, IPv6, DNS, route to the AI hosts). Calls back
@@ -148,6 +168,7 @@ public final class LiveSystem {
         guard !stopped else { return }
         stopped = true
         watchdog.stop()
+        ipc?.stop(); ipc = nil
         for o in observers { NSWorkspace.shared.notificationCenter.removeObserver(o) }
         observers = []
         monitor?.stop()

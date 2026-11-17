@@ -5,6 +5,22 @@ import SafeNetCore
 /// Opens the panel from the accessory (no Dock icon) app: activate first so the new window
 /// becomes key, then open it, then bring an already open panel to the front.
 enum PanelOpener {
+    /// Remembered from a view (the menu bar label exists from launch), so the CLI can open the
+    /// panel without a view at hand. Main thread only.
+    private static var action: OpenWindowAction?
+    static func register(_ openWindow: OpenWindowAction) { action = openWindow }
+
+    /// `SafeNetApp panel`: main thread. Opens the panel through the remembered action, else brings
+    /// an existing (hidden) panel window forward. False when neither is possible.
+    static func openFromCLI() -> Bool {
+        if let a = action { open(a); return true }
+        let panels = NSApp.windows.filter { $0.identifier?.rawValue.hasPrefix("panel") == true }
+        guard !panels.isEmpty else { return false }
+        NSRunningApplication.current.activate(options: [])
+        panels.forEach { $0.makeKeyAndOrderFront(nil) }
+        return true
+    }
+
     static func open(_ openWindow: OpenWindowAction) {
         var opts: NSApplication.ActivationOptions = []
         if #unavailable(macOS 14) { opts.insert(.activateIgnoringOtherApps) }

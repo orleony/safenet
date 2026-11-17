@@ -64,8 +64,8 @@ func registerPanelModelTests() {
     }
 
     test("testCustomAppKindDescription") {
-        expect(CustomAppInput.kindText("Telegram").contains("имя"))
-        expect(CustomAppInput.kindText("/Foo.app/").contains("путь"))
+        expect(CustomAppInput.kindText("Telegram").contains("имени"))
+        expect(CustomAppInput.kindText("/Foo.app/").contains("пути"))
         expect(CustomAppInput.kindText("args:bot.py").contains("командн"))
     }
 

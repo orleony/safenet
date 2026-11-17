@@ -224,7 +224,7 @@ public enum EventText {
         case (.paused, _): return who + "пауза"
         case (.leak, "freezeFailed"): return who + "не удалось заморозить"
         case (.leak, _):
-            if let w = why { return who + w.prefix(1).uppercased() + w.dropFirst() }
+            if let w = why { return who + w.prefix(1).uppercased() + String(w.dropFirst()) }
             return who + "Утечка"
         case (.networkChanged, _): return "Сеть изменилась"
         case (.ipChanged, _): return "Внешний IP изменился"

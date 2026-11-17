@@ -51,8 +51,9 @@ public struct MenuBarView: View {
                     .font(theme.font(11)).foregroundColor(p.frozen.swiftUIColor)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            if let e = model.lastError {
-                Text(e).font(theme.font(11)).foregroundColor(p.danger.swiftUIColor)
+            ForEach(model.messages, id: \.text) { m in
+                Label(m.text, systemImage: m.isError ? "xmark.octagon" : "info.circle")
+                    .font(theme.font(11)).foregroundColor((m.isError ? p.danger : p.muted).swiftUIColor)
                     .fixedSize(horizontal: false, vertical: true)
             }
             if model.needsAllowSetup { FirstRunCard(model: model, openPanel: openPanel) }

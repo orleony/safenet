@@ -89,7 +89,7 @@ public enum IPMatcher {
         return parts.count == 2 && isValidEntry(entry) ? Int(parts[1]) : nil
     }
 
-    static func matches(_ ip: String, entry: String) -> Bool {
+    public static func matches(_ ip: String, entry: String) -> Bool {
         guard let addr = parse(ip) else { return false }
         let parts = entry.split(separator: "/", maxSplits: 1, omittingEmptySubsequences: false).map(String.init)
         guard let net = parse(parts[0]), net.count == addr.count else { return false }

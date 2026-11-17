@@ -41,6 +41,7 @@ public final class AppState: ObservableObject {
     /// Production instance: real engine (call `start()` once the app launched).
     public init(system: LiveSystem, appearance: SystemAppearance = SystemAppearance()) {
         self.system = system
+        previewLog = nil
         self.testMode = system.testMode
         self.appearance = appearance
         config = system.engine.config

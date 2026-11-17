@@ -181,4 +181,30 @@ func registerPanelModelTests() {
         expectEqual(lv(d(failed, leak, snap), "dns"), .unknown, "check off: not evaluated, not OK")
         expectEqual(lv(d(nil, nil, snap), "svc-summary"), .fail, "1 answer < min_agree 2")
     }
+
+    test("testConfigEditCustomAppRenameMovesRules") {
+        var c = Config.default
+        ConfigEdit.saveCustom(&c, original: nil, name: " Tool ", match: " Tool ")
+        expectEqual(c.customApps, [CustomApp(name: "Tool", match: "Tool")])
+        c.appRules["Tool"] = AllowList(countries: ["NL"]); c.appGrace["Tool"] = 60
+        ConfigEdit.saveCustom(&c, original: "Tool", name: "Tool2", match: "args:tool.py")
+        expectEqual(c.customApps, [CustomApp(name: "Tool2", match: "args:tool.py")])
+        expectEqual(c.appRules["Tool2"], AllowList(countries: ["NL"])); expectEqual(c.appRules["Tool"], nil)
+        expectEqual(c.appGrace["Tool2"], 60); expectEqual(c.appGrace["Tool"], nil)
+        ConfigEdit.deleteCustom(&c, "Tool2")
+        expectEqual(c.customApps, []); expectEqual(c.appRules, [:]); expectEqual(c.appGrace, [:])
+    }
+
+    test("testConfigEditCommonRulesToggle") {
+        var c = Config.default
+        c.allow = AllowList(ips: ["1.2.3.4"], countries: ["NL"]); c.grace = 20
+        ConfigEdit.setUseCommonRules(&c, "claude", false)
+        expectEqual(c.appRules["claude"], c.allow, "own list starts as a copy (no instant freeze)")
+        ConfigEdit.setUseCommonRules(&c, "claude", true)
+        expectEqual(c.appRules["claude"], nil)
+        ConfigEdit.setUseCommonGrace(&c, "claude", false)
+        expectEqual(c.appGrace["claude"], 20)
+        ConfigEdit.setUseCommonGrace(&c, "claude", true)
+        expectEqual(c.appGrace["claude"], nil)
+    }
 }

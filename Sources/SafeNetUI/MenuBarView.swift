@@ -29,7 +29,7 @@ public struct MenuBarView: View {
                     .foregroundColor(p.muted.swiftUIColor)
             }
         }
-        .padding(14)
+        .padding(theme.padding)
         .frame(width: 270)
         .background(p.background.swiftUIColor)
     }
@@ -68,7 +68,7 @@ public struct MenuBarView: View {
 
     private var header: some View {
         let p = theme.palette
-        return HStack(spacing: 6) {
+        return HStack(spacing: theme.smallGap) {
             Circle().fill(stateColor(model.state, p).swiftUIColor).frame(width: 8, height: 8)
             Text(Format.stateTitle(model.state, hasApps: model.hasProtectedApps))
                 .font(theme.font(13, weight: .semibold)).foregroundColor(p.text.swiftUIColor)
@@ -79,9 +79,9 @@ public struct MenuBarView: View {
 
     private var ipBlock: some View {
         let p = theme.palette
-        return VStack(alignment: .leading, spacing: 2) {
+        return VStack(alignment: .leading, spacing: theme.smallGap / 2) {
             if let a = model.lastIP {
-                HStack(spacing: 8) {
+                HStack(spacing: theme.spacing - 4) {
                     Text(Format.flag(a.country)).font(.system(size: 26))
                     Text(a.ip).font(theme.font(20, weight: .semibold)).foregroundColor(p.text.swiftUIColor)
                         .lineLimit(1).minimumScaleFactor(0.6).textSelection(.enabled)
@@ -96,7 +96,7 @@ public struct MenuBarView: View {
 
     private var apps: some View {
         let p = theme.palette
-        return VStack(alignment: .leading, spacing: 6) {
+        return VStack(alignment: .leading, spacing: theme.smallGap) {
             if model.shownApps.isEmpty {
                 Text("Нет защищаемых приложений — добавьте их в панели")
                     .font(theme.font(11)).foregroundColor(p.muted.swiftUIColor)
@@ -107,7 +107,7 @@ public struct MenuBarView: View {
     }
 
     private var buttons: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: theme.spacing - 4) {
             if case .paused(let until) = model.state {
                 TimelineView(.periodic(from: Date(), by: 1)) { ctx in
                     Button("Возобновить · \(Format.countdown(until.timeIntervalSince(ctx.date)))") { model.resumeProtection() }
@@ -115,6 +115,7 @@ public struct MenuBarView: View {
                 }
             } else {
                 Menu {
+                    Button("\(Int(model.defaultPause / 60)) мин (по умолчанию)") { model.pause() }
                     Button("5 мин") { model.pause(for: 5 * 60) }
                     Button("15 мин") { model.pause(for: 15 * 60) }
                     Button("1 час") { model.pause(for: 60 * 60) }
@@ -125,7 +126,7 @@ public struct MenuBarView: View {
                 .menuIndicator(.hidden)
                 .fixedSize()
                 .frame(maxWidth: .infinity)
-                .padding(.vertical, 6)
+                .padding(.vertical, theme.rowPadding)
                 .background(RoundedRectangle(cornerRadius: Metrics.smallCornerRadius).fill(theme.palette.surface.swiftUIColor))
                 .overlay(RoundedRectangle(cornerRadius: Metrics.smallCornerRadius)
                     .stroke(theme.palette.hairline.swiftUIColor, lineWidth: Metrics.hairlineWidth))
@@ -157,10 +158,5 @@ public struct MenuBarView: View {
         return w
     }
 
-    private func openPanel() {
-        openWindow(id: "panel")
-        var opts: NSApplication.ActivationOptions = []
-        if #unavailable(macOS 14) { opts.insert(.activateIgnoringOtherApps) }
-        NSRunningApplication.current.activate(options: opts)
-    }
+    private func openPanel() { PanelOpener.open(openWindow) }
 }

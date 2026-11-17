@@ -20,6 +20,8 @@ public final class AppState: ObservableObject {
     /// Apps shown in the menu window: selected ones plus ones toggled off during this session
     /// (so a row does not vanish under the mouse).
     @Published public private(set) var shownApps: [String] = []
+    /// Last deep check ("Проверка" tab), kept while the app runs.
+    @Published public internal(set) var lastDeepCheck: DeepCheckData?
 
     public let testMode: TestMode?
     /// Test mode without SAFENET_CONFIG_DIR: nothing is saved (shown in the window).
@@ -121,7 +123,7 @@ public final class AppState: ObservableObject {
     /// Runs the on-demand deep check off the main thread; `done` is called on the main queue.
     public func runDeepCheck(_ done: @escaping (DeepCheckData) -> Void) {
         guard let s = system else { return }
-        s.deepCheck { d in DispatchQueue.main.async { done(d) } }
+        s.deepCheck { d in DispatchQueue.main.async { [weak self] in self?.lastDeepCheck = d; done(d) } }
     }
 
     public var configURL: URL? { system?.paths.config }

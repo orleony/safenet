@@ -19,8 +19,8 @@ struct SNButtonStyle: ButtonStyle {
             .font(theme.font(12, weight: .semibold))
             .foregroundColor(ink)
             .frame(maxWidth: .infinity)
-            .padding(.vertical, 6)
-            .padding(.horizontal, 8)
+            .padding(.vertical, theme.rowPadding)
+            .padding(.horizontal, theme.spacing - 4)
             .background(RoundedRectangle(cornerRadius: Metrics.smallCornerRadius).fill(fill))
             .overlay(RoundedRectangle(cornerRadius: Metrics.smallCornerRadius)
                 .stroke(p.hairline.swiftUIColor, lineWidth: kind == .primary ? 0 : Metrics.hairlineWidth))
@@ -73,7 +73,7 @@ struct AppRow: View {
 
     var body: some View {
         let p = theme.palette
-        HStack(spacing: 6) {
+        HStack(spacing: theme.smallGap) {
             VStack(alignment: .leading, spacing: 1) {
                 Text(AppCatalog.displayName(for: id))
                     .font(theme.font(12, weight: .medium))
@@ -100,8 +100,8 @@ struct AppRow: View {
     private var isCustom: Bool { model.config.customApps.contains { $0.name == id } }
 
     private var unsupportedNote: String? {
-        guard !isCustom, let pr = AppCatalog.preset(id), pr.unsupported != nil else { return nil }
-        return "не поддерживается: системное приложение"
+        guard !isCustom, let pr = AppCatalog.preset(id), let why = pr.unsupported else { return nil }
+        return "не поддерживается: \(why)"
     }
 
     private var badge: (String, RGB)? {
@@ -110,7 +110,7 @@ struct AppRow: View {
         if s.freezeFailedApps.contains(id) { return ("НЕ ЗАМОРОЖЕНО", p.danger) }
         if s.frozenApps.contains(id) { return ("ЗАМОРОЖЕНО", p.frozen) }
         if s.releasedApps.contains(id) { return ("ОТПУЩЕНО", p.muted) }
-        if case .closed = s.state { return ("ЗАКРЫТО", p.danger) }
+        if s.closedApps.contains(id) { return ("ЗАКРЫТО", p.danger) }
         return nil
     }
 }
@@ -125,7 +125,7 @@ struct FrozenCard: View {
 
     var body: some View {
         let p = theme.palette
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: theme.smallGap) {
             Text(Format.reason(reason).prefix(1).uppercased() + Format.reason(reason).dropFirst())
                 .font(theme.font(12, weight: .medium))
                 .foregroundColor(stateColor(model.state, p).swiftUIColor)
@@ -143,7 +143,7 @@ struct FrozenCard: View {
             Button("Разрешить этот IP") { model.allowCurrent() }
                 .buttonStyle(SNButtonStyle(kind: .secondary, theme: theme))
                 .disabled(model.lastIP == nil)
-            HStack(spacing: 6) {
+            HStack(spacing: theme.smallGap) {
                 Button("Продлить") { model.extend(by: 60) }
                     .buttonStyle(SNButtonStyle(kind: .secondary, theme: theme))
                     .disabled(deadline == nil)
@@ -157,7 +157,7 @@ struct FrozenCard: View {
                 .buttonStyle(SNButtonStyle(kind: .danger, theme: theme))
             }
         }
-        .padding(10)
+        .padding(theme.spacing - 2)
         .background(RoundedRectangle(cornerRadius: Metrics.cornerRadius).fill(p.surface.swiftUIColor))
     }
 }
@@ -170,7 +170,7 @@ struct FirstRunCard: View {
 
     var body: some View {
         let p = theme.palette
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: theme.smallGap) {
             Text("Выберите разрешённые страны или IP")
                 .font(theme.font(12, weight: .semibold)).foregroundColor(p.text.swiftUIColor)
             Text("Пока список пуст, выбранные приложения будут заморожены.")
@@ -183,7 +183,7 @@ struct FirstRunCard: View {
             Button("Открыть панель") { openPanel() }
                 .buttonStyle(SNButtonStyle(kind: .secondary, theme: theme))
         }
-        .padding(10)
+        .padding(theme.spacing - 2)
         .background(RoundedRectangle(cornerRadius: Metrics.cornerRadius).fill(p.surface.swiftUIColor))
     }
 }

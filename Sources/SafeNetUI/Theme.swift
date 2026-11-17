@@ -56,6 +56,12 @@ public final class Theme: ObservableObject {
         fontStyle = config.fontStyle
     }
 
+    /// Density-derived spacing: `spacing` (8 compact / 12 comfortable) is the main gap; these
+    /// keep the menu window and the panel in proportion when density changes.
+    public var smallGap: CGFloat { (spacing / 2).rounded() }        // 4 / 6
+    public var padding: CGFloat { spacing + 2 }                       // 10 / 14
+    public var rowPadding: CGFloat { (spacing * 0.6).rounded() }     // 5 / 7
+
     public func font(_ size: CGFloat, weight: Font.Weight = .regular) -> Font {
         switch fontStyle {
         case .system: return .system(size: size, weight: weight)

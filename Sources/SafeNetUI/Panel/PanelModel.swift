@@ -244,3 +244,37 @@ public enum EventText {
         }
     }
 }
+
+// MARK: - Config mutations used by the panel (all go through AppState.update)
+
+public enum ConfigEdit {
+    /// Adds (original nil) or replaces a custom app; a rename moves its rules, grace and `apps` entry.
+    public static func saveCustom(_ c: inout Config, original: String?, name: String, match: String) {
+        let n = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let app = CustomApp(name: n, match: match.trimmingCharacters(in: .whitespacesAndNewlines))
+        guard let o = original, let i = c.customApps.firstIndex(where: { $0.name == o }) else {
+            c.customApps.append(app); return
+        }
+        c.customApps[i] = app
+        guard o != n else { return }
+        if let r = c.appRules.removeValue(forKey: o) { c.appRules[n] = r }
+        if let g = c.appGrace.removeValue(forKey: o) { c.appGrace[n] = g }
+        c.apps = c.apps.map { $0 == o ? n : $0 }
+    }
+
+    public static func deleteCustom(_ c: inout Config, _ name: String) {
+        c.customApps.removeAll { $0.name == name }
+        c.appRules[name] = nil
+        c.appGrace[name] = nil
+        c.apps.removeAll { $0 == name }
+    }
+
+    /// Off: the app gets its own list, starting as a copy of the common one (no instant freeze).
+    public static func setUseCommonRules(_ c: inout Config, _ id: String, _ common: Bool) {
+        c.appRules[id] = common ? nil : (c.appRules[id] ?? c.allow)
+    }
+
+    public static func setUseCommonGrace(_ c: inout Config, _ id: String, _ common: Bool) {
+        c.appGrace[id] = common ? nil : (c.appGrace[id] ?? c.grace)
+    }
+}

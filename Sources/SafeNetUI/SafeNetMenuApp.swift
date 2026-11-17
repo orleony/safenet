@@ -24,7 +24,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
-/// The SwiftUI app: `MenuBarExtra` (window style) + the panel window (placeholder until Task 10).
+/// The SwiftUI app: `MenuBarExtra` (window style) + the panel window (`PanelView`). Closing the
+/// panel never quits the app (`applicationShouldTerminateAfterLastWindowClosed` is false).
 public struct SafeNetMenuApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     @StateObject private var model: AppState
@@ -50,11 +51,11 @@ public struct SafeNetMenuApp: App {
         .menuBarExtraStyle(.window)
 
         Window("SafeNet", id: "panel") {
-            PanelPlaceholderView(model: model)
+            PanelView(model: model)
                 .environmentObject(theme)
                 .preferredColorScheme(theme.forcedScheme)
         }
-        .defaultSize(width: 720, height: 480)
+        .defaultSize(width: 760, height: 520)
     }
 }
 
@@ -74,26 +75,5 @@ struct MenuBarLabel: View {
         } else {
             Image(systemName: symbol)
         }
-    }
-}
-
-/// Placeholder panel (Task 10 fills the tabs).
-struct PanelPlaceholderView: View {
-    @ObservedObject var model: AppState
-    @EnvironmentObject var theme: Theme
-
-    var body: some View {
-        let p = theme.palette
-        VStack(alignment: .leading, spacing: theme.spacing) {
-            Text("SafeNet").font(theme.font(22, weight: .bold)).foregroundColor(p.text.swiftUIColor)
-            Text(Format.stateTitle(model.state, hasApps: model.hasProtectedApps))
-                .font(theme.font(14)).foregroundColor(p.muted.swiftUIColor)
-            Text("Вкладки панели появятся позже. Настройки сейчас — в config.yaml.")
-                .font(theme.font(12)).foregroundColor(p.muted.swiftUIColor)
-            Spacer()
-        }
-        .padding(24)
-        .frame(minWidth: 520, minHeight: 360, alignment: .topLeading)
-        .background(p.background.swiftUIColor)
     }
 }

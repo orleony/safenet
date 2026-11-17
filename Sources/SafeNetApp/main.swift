@@ -9,6 +9,8 @@ import SafeNetUI
 //    running app (unix socket); no AppKit, no Dock icon, exits with its own code.
 //  - otherwise: the menu-bar app.
 let args = CommandLine.arguments
+// A peer closing a socket early must never terminate us (all modes; EPIPE is handled at each write).
+signal(SIGPIPE, SIG_IGN)
 if args.count >= 4, args[1] == "--watchdog", let parent = Int32(args[2]), parent > 1 {
     // Survive Ctrl-C / terminal hang-up aimed at the app's process group: the watchdog's job
     // starts exactly when the parent is gone.

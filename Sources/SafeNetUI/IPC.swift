@@ -22,6 +22,11 @@ public enum IPCServerError: Error, Equatable, CustomStringConvertible {
     }
 }
 
+/// A peer that closes early must never kill the process: writes then fail with EPIPE (handled),
+/// not SIGPIPE. `SO_NOSIGPIPE` alone is not enough: on macOS it fails with EINVAL on a socket whose
+/// peer is already gone. Idempotent; called by the server, the client and `main`.
+func ignoreSIGPIPE() { signal(SIGPIPE, SIG_IGN) }
+
 public final class IPCServer {
     public typealias Handler = (CLICommand, @escaping (IPCResponse) -> Void) -> Void
 
@@ -65,6 +70,7 @@ public final class IPCServer {
     public func start() throws {
         lock.lock(); defer { lock.unlock() }
         guard listenFD < 0 else { return }
+        ignoreSIGPIPE()
         let dir = (path as NSString).deletingLastPathComponent
         try IPCServer.prepareDirectory(dir, strict: strictDirectory)
         try IPCServer.removeStaleSocket(path)
@@ -90,6 +96,7 @@ public final class IPCServer {
 
         let src = DispatchSource.makeReadSource(fileDescriptor: fd, queue: queue)
         src.setEventHandler { [weak self] in self?.acceptPending(fd) }
+        src.setCancelHandler { close(fd) }                       // closed only once no handler can run on it
         src.resume()
         source = src
     }
@@ -101,9 +108,7 @@ public final class IPCServer {
         listenFD = -1; source = nil
         lock.unlock()
         guard fd >= 0 else { return }
-        src?.setEventHandler {}
         src?.cancel()
-        close(fd)
         var st = stat()
         if lstat(path, &st) == 0, st.st_ino == ino, (st.st_mode & S_IFMT) == S_IFSOCK { unlink(path) }
     }
@@ -162,16 +167,24 @@ public final class IPCServer {
             let c = accept(lfd, nil, nil)
             if c < 0 { return }                                   // EAGAIN: drained
             var one: Int32 = 1
-            setsockopt(c, SOL_SOCKET, SO_NOSIGPIPE, &one, socklen_t(MemoryLayout<Int32>.size))
+            // May fail (EINVAL) when the peer is already gone: non-fatal, SIGPIPE is ignored
+            // process-wide and every write checks its result.
+            _ = setsockopt(c, SOL_SOCKET, SO_NOSIGPIPE, &one, socklen_t(MemoryLayout<Int32>.size))
             _ = fcntl(c, F_SETFD, FD_CLOEXEC)
             guard peerAllowed(c) else { close(c); continue }
             lock.lock()
             let ok = active < maxConnections
             if ok { active += 1 }
             lock.unlock()
-            guard ok else {                                           // over the cap: a short "busy" answer, no thread
-                _ = IPCIO.write(c, encodeMessage(IPCResponse.error("SafeNet занят, повторите команду")), timeout: 0.2)
-                close(c); continue
+            guard ok else {
+                // Over the cap: a short "busy" answer. The request is read first (briefly): closing
+                // a socket with unread data resets the connection and the client would lose the answer.
+                DispatchQueue.global(qos: .utility).async {
+                    _ = IPCIO.readLine(c, timeout: 0.3)
+                    _ = IPCIO.write(c, encodeMessage(IPCResponse.error("SafeNet занят, повторите команду")), timeout: 0.2)
+                    shutdown(c, SHUT_WR); close(c)
+                }
+                continue
             }
             DispatchQueue.global(qos: .utility).async { [weak self] in self?.serve(c) }
         }
@@ -193,7 +206,11 @@ public final class IPCServer {
             }
         }
         let once = Once()
-        handler(command) { [weak self] r in once.run { self?.reply(fd, r) } }
+        // The reply is written off the caller's queue (the engine queue): a client that stops
+        // reading must never stall the engine.
+        handler(command) { [weak self] r in
+            DispatchQueue.global(qos: .utility).async { once.run { self?.reply(fd, r) } }
+        }
         DispatchQueue.global().asyncAfter(deadline: .now() + replyTimeout) { [weak self] in
             once.run { self?.reply(fd, .error("SafeNet не ответил вовремя")) }
         }
@@ -275,6 +292,7 @@ public enum IPCClientError: Error, Equatable {
 public enum IPCClient {
     /// Connected fd (blocking, send/receive timeouts set).
     static func connect(path: String, timeout: TimeInterval) -> Result<Int32, IPCClientError> {
+        ignoreSIGPIPE()
         let fd = socket(AF_UNIX, SOCK_STREAM, 0)
         guard fd >= 0 else { return .failure(.protocolError("socket")) }
         var one: Int32 = 1

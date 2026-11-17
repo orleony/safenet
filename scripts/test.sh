@@ -34,9 +34,18 @@ for dir in Tests/*Tests; do
     -lSafeNetUI -lSafeNetCore -o "$OUT/$name" \
     Tests/TestKit/TestKit.swift "$dir"/*.swift "$main"
   echo "==> running $name"
-  if [ -n "$FILTER" ]; then "$OUT/$name" "$FILTER" | tee "$OUT/$name.log" || STATUS=1; else "$OUT/$name" | tee "$OUT/$name.log" || STATUS=1; fi
-  [ "${PIPESTATUS[0]}" = 0 ] || STATUS=1
-  TOTAL=$((TOTAL + $(sed -n 's/^Executed \([0-9]*\) tests.*/\1/p' "$OUT/$name.log")))
+  set +e
+  if [ -n "$FILTER" ]; then "$OUT/$name" "$FILTER" > "$OUT/$name.log" 2>&1; RC=$?; else "$OUT/$name" > "$OUT/$name.log" 2>&1; RC=$?; fi
+  set -e
+  cat "$OUT/$name.log"
+  N="$(sed -n 's/^Executed \([0-9]*\) tests.*/\1/p' "$OUT/$name.log" | tail -n 1)"
+  if [ -z "$N" ]; then
+    if [ "$RC" -gt 128 ]; then WHY="killed by signal $((RC - 128))"; else WHY="exit code $RC"; fi
+    echo "!!! TEST BINARY $name ABNORMAL EXIT ($WHY): no 'Executed N tests' line; the run is incomplete" >&2
+    STATUS=1; continue
+  fi
+  [ "$RC" = 0 ] || STATUS=1
+  TOTAL=$((TOTAL + N))
 done
 [ "$TOTAL" -gt 0 ] || { echo "No tests executed"; STATUS=1; }
 exit $STATUS

@@ -299,16 +299,43 @@ func registerIPCServerTests() {
         let r = IRig()
         try r.server.start()
         let group = DispatchGroup()
-        let lock = NSLock(); var okCount = 0
+        let lock = NSLock(); var okCount = 0, busyCount = 0, other = 0
         for _ in 0..<20 {
             group.enter()
             DispatchQueue.global().async {
-                if r.ask(.version)?.ok == true { lock.lock(); okCount += 1; lock.unlock() }
+                let res = IPCClient.send(.version, path: r.sock, timeout: 3)
+                lock.lock()
+                if case .success(let x) = res {
+                    if x.ok { okCount += 1 } else if x.text.contains("занят") { busyCount += 1 } else { other += 1 }
+                } else { other += 1 }
+                lock.unlock()
                 group.leave()
             }
         }
-        expectEqual(group.wait(timeout: .now() + 20), .success)
-        expect(okCount >= 1, "at least some served (the connection cap may refuse the rest): \(okCount)")
+        expectEqual(group.wait(timeout: .now() + 20), .success, "no client hangs")
+        expectEqual(okCount + busyCount, 20, "every client got ok or busy (ok \(okCount), busy \(busyCount), other \(other))")
+        expectEqual(other, 0)
+        expectEqual(r.ask(.version)?.ok, true, "server answers afterwards")
+    }
+
+    test("testIPCEarlyDisconnectsNeverKillTheProcess") {
+        // SIGPIPE regression: a client that sends a request and closes at once must not terminate
+        // the server process (the reply write hits a closed peer). Deliberately NOT ignoring the
+        // signal here: the server itself has to make the process safe.
+        let r = IRig()
+        try r.server.start()
+        for i in 0..<200 {
+            guard case .success(let fd) = IPCClient.connect(path: r.sock, timeout: 1) else { continue }
+            _ = IPCIO.write(fd, encodeMessage(IPCRequest(i % 2 == 0 ? .status : .version)), timeout: 1)
+            close(fd)
+        }
+        // Over-the-cap "busy" path with a vanished peer as well.
+        for _ in 0..<40 {
+            if case .success(let fd) = IPCClient.connect(path: r.sock, timeout: 1) { close(fd) }
+        }
+        var ok = false
+        for _ in 0..<20 where !ok { ok = r.ask(.version)?.ok == true; if !ok { usleep(100_000) } }
+        expect(ok, "still alive and answering after 240 early disconnects")
     }
 
     // MARK: Status text

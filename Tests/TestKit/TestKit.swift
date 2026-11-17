@@ -38,6 +38,7 @@ public func expectThrows(_ body: () throws -> Void, _ msg: String = "",
 }
 
 public func runAllTests() -> Never {
+    signal(SIGPIPE, SIG_IGN)                      // a test must never be killed by a closed socket
     let filter: String? = CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : nil
     var executed = 0, failed = 0
     for t in registeredTests {

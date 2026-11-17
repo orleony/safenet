@@ -57,6 +57,7 @@ public enum DeepCheck {
     private static func services(_ d: DeepCheckData, _ allow: AllowList, _ c: Config) -> CheckSection {
         var rows: [CheckRow] = []
         let emptyAllow = allow.ips.isEmpty && allow.countries.isEmpty
+        let confirmed = Engine.confirmed(d.services.compactMap { $0.answer }, minAgree: max(1, c.minAgree))
         for (i, s) in d.services.enumerated() {
             switch s.outcome {
             case .answer(let a):
@@ -65,6 +66,9 @@ public enum DeepCheck {
                                          advice: "Список «Разрешено» пуст: ни один адрес не разрешён."))
                 } else if allowed(a.ip, a.country, allow) {
                     rows.append(CheckRow(id: "svc-\(i)", level: .ok, title: s.service, detail: place(a.ip, a.country) + " — разрешён"))
+                } else if let cf = confirmed, cf.ip == a.ip, allowed(cf.ip, cf.country, allow) {
+                    rows.append(CheckRow(id: "svc-\(i)", level: .warn, title: s.service,
+                                         detail: place(a.ip, a.country) + " — тот же IP, но база этого сервиса считает страну другой"))
                 } else {
                     rows.append(CheckRow(id: "svc-\(i)", level: .fail, title: s.service,
                                          detail: place(a.ip, a.country) + " — не из разрешённых", advice: vpnAdvice))

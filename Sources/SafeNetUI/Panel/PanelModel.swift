@@ -120,7 +120,12 @@ public enum CustomAppInput {
     /// Plain-language description of a match rule (shown next to the field).
     public static func kindText(_ match: String) -> String {
         let parts = match.components(separatedBy: "&&")
-        if parts.count > 1 { return "все условия сразу: " + parts.map { kindText($0) }.joined(separator: " и ") }
+        if parts.count > 1 {
+            let short = parts.map { p -> String in
+                switch content(p).kind { case "args": return "командная строка"; case "cmd": return "команда"; case "path": return "путь"; default: return "имя" }
+            }
+            return "все условия сразу (" + short.joined(separator: " + ") + ")"
+        }
         switch content(match).kind {
         case "args": return "по части командной строки"
         case "cmd": return "по имени команды (первые слова командной строки)"

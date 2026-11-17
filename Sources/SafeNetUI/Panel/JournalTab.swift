@@ -15,7 +15,17 @@ struct JournalTab: View {
     var body: some View {
         let p = theme.palette
         VStack(alignment: .leading, spacing: theme.spacing + 2) {
-            SectionHeader(title: "Статистика и журнал", subtitle: "Счётчики накапливаются с начала работы или с последней очистки.")
+            HStack(alignment: .top) {
+                SectionHeader(title: "Статистика и журнал", subtitle: "Счётчики накапливаются с начала работы или с последней очистки.")
+                Spacer()
+                Button("Очистить…") { confirmClear = true }
+                    .buttonStyle(SNButtonStyle(kind: .danger, theme: theme)).fixedSize()
+                    .disabled(model.eventLog == nil)
+                    .confirmationDialog("Очистить журнал и статистику?", isPresented: $confirmClear) {
+                        Button("Очистить", role: .destructive) { model.eventLog?.clear(); reload() }
+                        Button("Отмена", role: .cancel) {}
+                    } message: { Text("Это действие нельзя отменить.") }
+            }
             HStack(spacing: theme.spacing - 2) {
                 counter("\(stats.resumedInTime)", "VPN вернулся вовремя", "checkmark.circle", p.ok)
                 counter("\(stats.freezes)", "Заморозок", "snowflake", p.frozen)
@@ -26,14 +36,6 @@ struct JournalTab: View {
                 ForEach(EventText.filters, id: \.title) { f in
                     Chip(title: f.title, selected: filter == f.kinds) { filter = f.kinds; reload() }
                 }
-                Spacer(minLength: theme.smallGap)
-                Button("Очистить") { confirmClear = true }
-                    .buttonStyle(SNButtonStyle(kind: .danger, theme: theme)).fixedSize()
-                    .disabled(model.eventLog == nil)
-                    .confirmationDialog("Очистить журнал и статистику?", isPresented: $confirmClear) {
-                        Button("Очистить", role: .destructive) { model.eventLog?.clear(); reload() }
-                        Button("Отмена", role: .cancel) {}
-                    } message: { Text("Это действие нельзя отменить.") }
             }
             Card {
                 if events.isEmpty { Note(filter == nil ? "Событий пока нет" : "Нет событий этого типа") }

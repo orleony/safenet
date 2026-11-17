@@ -78,8 +78,9 @@ struct Chip: View {
         Button(action: action) {
             HStack(spacing: 3) {
                 if selected { Image(systemName: "checkmark").font(.system(size: 9, weight: .bold)) }
-                Text(title)
+                Text(title).lineLimit(1)
             }
+            .fixedSize()
             .font(theme.font(11, weight: .medium))
             .foregroundColor((selected ? p.onAccent : p.text).swiftUIColor)
             .padding(.horizontal, theme.spacing - 2).padding(.vertical, theme.smallGap)
@@ -128,13 +129,17 @@ struct Segmented<T: Hashable>: View {
 /// Switch drawn with the theme; the state is also spoken ("вкл"/"выкл") and the label is kept.
 struct SNSwitchStyle: ToggleStyle {
     let theme: Theme
+    /// false: only the switch is drawn (the label stays the accessibility label).
+    var showLabel = true
     func makeBody(configuration: Configuration) -> some View {
         let p = theme.palette
         let on = configuration.isOn
         return Button { configuration.isOn.toggle() } label: {
             HStack(spacing: theme.spacing - 4) {
-                configuration.label
-                Spacer(minLength: theme.smallGap)
+                if showLabel {
+                    configuration.label
+                    Spacer(minLength: theme.smallGap)
+                }
                 ZStack(alignment: on ? .trailing : .leading) {
                     Capsule().fill((on ? p.accent : p.hairline).swiftUIColor).frame(width: 30, height: 18)
                     Circle().fill((on ? p.onAccent : p.muted).swiftUIColor).frame(width: 14, height: 14).padding(2)
@@ -242,6 +247,7 @@ struct LevelIcon: View {
             }
         }()
         Image(systemName: sym).foregroundColor(col.swiftUIColor).font(.system(size: 13))
+            .frame(width: 16)
             .accessibilityLabel(word)
     }
 }

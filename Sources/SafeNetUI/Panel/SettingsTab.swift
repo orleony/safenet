@@ -82,7 +82,7 @@ struct SettingsTab: View {
     }
 
     func toggle(_ label: String, _ on: Bool, _ set: @escaping (Bool) -> Void) -> some View {
-        Toggle(label, isOn: Binding(get: { on }, set: set)).toggleStyle(SNSwitchStyle(theme: theme)).labelsHidden().fixedSize()
+        Toggle(label, isOn: Binding(get: { on }, set: set)).toggleStyle(SNSwitchStyle(theme: theme, showLabel: false)).fixedSize()
             .accessibilityLabel(label)
     }
 

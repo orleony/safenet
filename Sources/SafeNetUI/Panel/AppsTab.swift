@@ -124,7 +124,7 @@ private struct PresetRow: View {
                         .accessibilityLabel("Правила для \(preset.name)")
                     }
                     Toggle(preset.name, isOn: Binding(get: { on }, set: { _ in model.toggleApp(preset.id) }))
-                        .toggleStyle(SNSwitchStyle(theme: theme)).labelsHidden().fixedSize()
+                        .toggleStyle(SNSwitchStyle(theme: theme, showLabel: false)).fixedSize()
                         .accessibilityLabel("Защищать \(preset.name)")
                 }
             }
@@ -159,7 +159,7 @@ private struct CustomRow: View {
                 VStack(alignment: .leading, spacing: 1) {
                     Text(app.name).font(theme.font(12, weight: .medium)).foregroundColor(p.text.swiftUIColor)
                     Text("\(app.match) — \(CustomAppInput.kindText(app.match))").font(theme.font(10, weight: .regular))
-                        .foregroundColor(p.muted.swiftUIColor).lineLimit(1).truncationMode(.middle)
+                        .foregroundColor(p.muted.swiftUIColor).fixedSize(horizontal: false, vertical: true)
                     if let s = ruleSummary(app.name, model.config) { Text(s).font(theme.font(10)).foregroundColor(p.muted.swiftUIColor) }
                 }
                 Spacer(minLength: theme.smallGap)

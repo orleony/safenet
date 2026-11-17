@@ -207,4 +207,19 @@ func registerPanelModelTests() {
         ConfigEdit.setUseCommonGrace(&c, "claude", true)
         expectEqual(c.appGrace["claude"], nil)
     }
+
+    test("testDeepCheckGeoIPDisagreementIsWarningNotFailure") {
+        var c = Config.default
+        c.allow = AllowList(ips: [], countries: ["NL"])
+        let d = DeepCheckData(
+            services: [ServiceResult(service: "a", outcome: .answer(IPAnswer(ip: "1.1.1.1", country: "NL"))),
+                       ServiceResult(service: "b", outcome: .answer(IPAnswer(ip: "1.1.1.1", country: "NL"))),
+                       ServiceResult(service: "c", outcome: .answer(IPAnswer(ip: "1.1.1.1", country: "CZ"))),
+                       ServiceResult(service: "d", outcome: .answer(IPAnswer(ip: "6.6.6.6", country: "CZ")))],
+            ipv6: nil, routes: [], resolvers: [], snapshot: NetSnapshot(online: true, hasTunnel: true, gatewayIP: nil, gatewayMAC: nil, proxy: nil),
+            finished: Date())
+        let rows = DeepCheck.sections(d, config: c).flatMap { $0.rows }
+        expectEqual(rows.first { $0.id == "svc-2" }?.level, .warn, "same confirmed IP, other GeoIP country")
+        expectEqual(rows.first { $0.id == "svc-3" }?.level, .fail, "a different IP stays a failure")
+    }
 }

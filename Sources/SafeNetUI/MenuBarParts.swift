@@ -17,10 +17,12 @@ struct SNButtonStyle: ButtonStyle {
         }
         return configuration.label
             .font(theme.font(12, weight: .semibold))
+            .lineLimit(1)
+            .minimumScaleFactor(0.9)
             .foregroundColor(ink)
             .frame(maxWidth: .infinity)
             .padding(.vertical, theme.rowPadding)
-            .padding(.horizontal, theme.spacing - 4)
+            .padding(.horizontal, theme.smallGap)
             .background(RoundedRectangle(cornerRadius: Metrics.smallCornerRadius).fill(fill))
             .overlay(RoundedRectangle(cornerRadius: Metrics.smallCornerRadius)
                 .stroke(p.hairline.swiftUIColor, lineWidth: kind == .primary ? 0 : Metrics.hairlineWidth))
@@ -88,11 +90,10 @@ struct AppRow: View {
             if isCustom {
                 Text("своё").font(theme.font(10)).foregroundColor(p.muted.swiftUIColor)
             } else {
-                Toggle("", isOn: Binding(get: { model.config.apps.contains(id) }, set: { _ in model.toggleApp(id) }))
-                    .toggleStyle(.switch)
-                    .controlSize(.mini)
-                    .labelsHidden()
-                    .tint(p.accent.swiftUIColor)
+                Toggle(AppCatalog.displayName(for: id), isOn: Binding(get: { model.config.apps.contains(id) }, set: { _ in model.toggleApp(id) }))
+                    .toggleStyle(SNSwitchStyle(theme: theme, showLabel: false))
+                    .fixedSize()
+                    .accessibilityLabel("Защищать \(AppCatalog.displayName(for: id))")
             }
         }
     }
@@ -101,7 +102,8 @@ struct AppRow: View {
 
     private var unsupportedNote: String? {
         guard !isCustom, let pr = AppCatalog.preset(id), let why = pr.unsupported else { return nil }
-        return "не поддерживается: \(why)"
+        // Menu is narrow: the reason's first clause; the panel shows it in full.
+        return "не поддерживается: " + (why.split(separator: ":").first.map(String.init) ?? why)
     }
 
     private var badge: (String, RGB)? {

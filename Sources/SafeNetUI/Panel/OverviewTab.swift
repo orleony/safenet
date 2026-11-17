@@ -49,7 +49,7 @@ struct OverviewTab: View {
                 ForEach(lines, id: \.0) { l in
                     HStack(alignment: .firstTextBaseline, spacing: theme.spacing - 4) {
                         LevelIcon(level: l.2)
-                        Text(l.0).font(theme.font(12, weight: .medium)).foregroundColor(p.text.swiftUIColor).frame(width: 110, alignment: .leading)
+                        Text(l.0).font(theme.font(12, weight: .medium)).foregroundColor(p.text.swiftUIColor).frame(width: 150, alignment: .leading)
                         Text(l.1).font(theme.font(12)).foregroundColor(p.muted.swiftUIColor).fixedSize(horizontal: false, vertical: true)
                     }
                 }

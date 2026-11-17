@@ -91,7 +91,7 @@ struct SystemSettings: View {
                 Text("Система").font(theme.font(12, weight: .semibold)).foregroundColor(p.text.swiftUIColor)
                 SettingRow("Запускать при входе в систему", detail: Autostart.isAvailable ? nil : "Работает только из SafeNet.app.") {
                     Toggle("Запускать при входе в систему", isOn: Binding(get: { model.autostartEnabled }, set: { model.setAutostart($0) }))
-                        .toggleStyle(SNSwitchStyle(theme: theme)).labelsHidden().fixedSize()
+                        .toggleStyle(SNSwitchStyle(theme: theme, showLabel: false)).fixedSize()
                         .accessibilityLabel("Запускать при входе в систему")
                 }
                 if let e = model.autostartError { Note(e, symbol: "xmark.octagon", color: p.danger) }

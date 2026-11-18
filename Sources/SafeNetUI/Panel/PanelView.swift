@@ -49,6 +49,7 @@ public struct PanelView: View {
             Rectangle().fill(p.hairline.swiftUIColor).frame(width: Metrics.hairlineWidth)
             ScrollView {
                 content
+                    .frame(maxWidth: 720, alignment: .topLeading)   // readable column; no stretching on wide windows
                     .frame(maxWidth: .infinity, alignment: .topLeading)
                     .padding(theme.padding + 6)
             }

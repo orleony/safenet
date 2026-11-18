@@ -129,6 +129,8 @@ for s in "Приложения заморожены" "ТЕСТОВЫЙ РЕЖИ�
 done
 OUT="$("$CLI" version 2>&1)"; [ "$OUT" = "SafeNet 1.0.0" ] && pass "safenet version: $OUT" || fail "safenet version: '$OUT'"
 OUT="$("$CLI" config 2>&1)"; [ "$OUT" = "$CFG/config.yaml" ] && pass "safenet config = temp config" || fail "safenet config: '$OUT'"
+OUT="$("$CLI" panel 2>&1)"; RC=$?
+[ $RC = 0 ] && [ "$OUT" = "Окно SafeNet открыто" ] && pass "safenet panel: $OUT (a visible panel window exists)" || fail "safenet panel: rc $RC '$OUT'"
 "$CLI" bogus >/dev/null 2>&1; RC=$?; [ $RC = 2 ] && pass "unknown command exit 2" || fail "unknown command exit $RC"
 OUT="$("$CLI" allow RU 2>&1)"; RC=$?
 [ $RC = 0 ] && echo "$OUT" | grep -qF "Разрешена страна RU" && pass "safenet allow RU: $OUT" || fail "safenet allow RU: rc $RC '$OUT'"

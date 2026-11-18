@@ -168,7 +168,9 @@ func registerPanelModelTests() {
         }
         func lv(_ x: DeepCheckData, _ id: String) -> CheckLevel? { DeepCheck.sections(x, config: c).flatMap { $0.rows }.first { $0.id == id }?.level }
         let failed = ServiceResult(service: "v6", outcome: .failed("x"))
-        expectEqual(lv(d(failed, [], snap), "ipv6"), .ok, "no global IPv6 address and no IPv6 answer")
+        expectEqual(lv(d(failed, [], snap), "ipv6"), .warn, "no global IPv6 and no answer: only inferred, never a plain OK")
+        expect(DeepCheck.sections(d(failed, [], snap), config: c).flatMap { $0.rows }.first { $0.id == "ipv6" }?.detail
+            .contains("по-видимому") == true)
         snap.hasGlobalIPv6 = true
         expectEqual(lv(d(failed, [], snap), "ipv6"), .unknown, "IPv6 present but the service failed: unknown")
         let tunnelDNS = [DNSResolver(address: "10.8.0.1", interface: "utun3", scoped: false)]
@@ -180,6 +182,21 @@ func registerPanelModelTests() {
         c.dnsCheck = .off
         expectEqual(lv(d(failed, leak, snap), "dns"), .unknown, "check off: not evaluated, not OK")
         expectEqual(lv(d(nil, nil, snap), "svc-summary"), .fail, "1 answer < min_agree 2")
+    }
+
+    test("testDeepCheckSummaryConfirmedButNotAllowed") {
+        var c = Config.default
+        c.allow = AllowList(ips: [], countries: ["NL"])
+        let snap = NetSnapshot(online: true, hasTunnel: true, gatewayIP: nil, gatewayMAC: nil, proxy: nil)
+        let ru = ServiceResult(service: "a", outcome: .answer(IPAnswer(ip: "5.5.5.5", country: "RU")))
+        let data = DeepCheckData(services: [ru, ru], ipv6: nil, routes: [], resolvers: nil, snapshot: snap, finished: Date())
+        let row = DeepCheck.sections(data, config: c).flatMap { $0.rows }.first { $0.id == "svc-summary" }
+        expectEqual(row?.level, .fail, "confirmed but not allowed is not green")
+        expect(row?.detail.contains("не разрешён") == true, row?.detail ?? "")
+        expect(row?.advice != nil)
+        c.allow = AllowList()
+        expectEqual(DeepCheck.sections(data, config: c).flatMap { $0.rows }.first { $0.id == "svc-summary" }?.level, .warn,
+                    "empty allow list: warning")
     }
 
     test("testConfigEditCustomAppRenameMovesRules") {

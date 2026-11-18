@@ -85,8 +85,16 @@ public enum DeepCheck {
             let n = answers.filter { $0.ip == conf.ip && $0.country.uppercased() == conf.country.uppercased() }.count
             let countries = Set(answers.map { $0.country.uppercased() })
             let note = countries.count > 1 ? " Сервисы расходятся по стране — так бывает из-за разных баз геолокации." : ""
-            rows.append(CheckRow(id: "svc-summary", level: .ok, title: "Итог",
-                                 detail: "IP подтверждён: \(n) из \(d.services.count) сервисов назвали \(place(conf.ip, conf.country)).\(note)"))
+            let base = "IP подтверждён: \(n) из \(d.services.count) сервисов назвали \(place(conf.ip, conf.country))."
+            if emptyAllow {
+                rows.append(CheckRow(id: "svc-summary", level: .warn, title: "Итог", detail: base + " Список «Разрешено» пуст.\(note)",
+                                     advice: "Укажите разрешённые страны или IP во вкладке «Разрешено»."))
+            } else if allowed(conf.ip, conf.country, allow) {
+                rows.append(CheckRow(id: "svc-summary", level: .ok, title: "Итог", detail: base + " Разрешён.\(note)"))
+            } else {
+                rows.append(CheckRow(id: "svc-summary", level: .fail, title: "Итог",
+                                     detail: base + " Подтверждён, но не разрешён.\(note)", advice: vpnAdvice))
+            }
         } else {
             rows.append(CheckRow(id: "svc-summary", level: .fail, title: "Итог",
                                  detail: "IP не подтверждён: нужно не меньше \(need) одинаковых ответов, получено \(answers.count) ответов.",
@@ -105,8 +113,8 @@ public enum DeepCheck {
                 row = CheckRow(id: "ipv6", level: .ok, title: "IPv6", detail: "IPv6 выходит через разрешённый адрес: \(place(a.ip, a.country))")
             }
         } else if !d.snapshot.hasGlobalIPv6 {
-            row = CheckRow(id: "ipv6", level: .ok, title: "IPv6",
-                           detail: "Глобального IPv6-адреса на сетевых интерфейсах нет, IPv6-сервис не ответил: утечки через IPv6 нет.")
+            row = CheckRow(id: "ipv6", level: .warn, title: "IPv6",
+                           detail: "Глобального IPv6-адреса на сетевых интерфейсах нет, IPv6-сервис не ответил: утечки через IPv6, по-видимому, нет (вывод по косвенным признакам, не проверено ответом сервиса).")
         } else {
             row = CheckRow(id: "ipv6", level: .unknown, title: "IPv6",
                            detail: "IPv6-адрес есть, но IPv6-сервис не ответил — проверить не удалось.",

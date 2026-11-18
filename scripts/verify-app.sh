@@ -84,6 +84,8 @@ FAILS=0
 pass() { echo "  ok   $*"; }
 fail() { echo "  FAIL $*"; FAILS=$((FAILS + 1)); }
 check() { local what="$1"; shift; if "$@" >/dev/null 2>&1; then pass "$what"; else fail "$what"; fi; }
+# Every call that might hang runs under a hard timeout (SIGALRM, exit 142).
+to() { local secs="$1"; shift; perl -e 'alarm shift; exec @ARGV or exit 127' "$secs" "$@"; }
 
 [ -x "$EXE" ] || { echo "no app at $APP (run scripts/build-app.sh)"; exit 2; }
 REAL_BEFORE="$( [ -e "$REAL_DIR" ] && ls -la "$REAL_DIR" 2>/dev/null | md5 || echo absent)"
@@ -136,8 +138,6 @@ cleanup() {
 trap 'cleanup; [ $FAILS = 0 ] || exit 1' EXIT
 trap 'exit 130' INT TERM
 
-# Every call that might hang runs under a hard timeout (SIGALRM, exit 142).
-to() { local secs="$1"; shift; perl -e 'alarm shift; exec @ARGV or exit 127' "$secs" "$@"; }
 # Reap the app after it was asked to exit: never block on a process that refused to die.
 reap_app() {
     if wait_for 10 dead "$APP_PID"; then wait "$APP_PID" 2>/dev/null

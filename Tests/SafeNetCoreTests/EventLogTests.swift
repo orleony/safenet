@@ -165,4 +165,18 @@ func registerEventLogTests() {
         expectEqual(log.recent(limit: 10, kinds: nil).map { $0.id }, ["id2"])
         expectEqual(log.stats().closed, 1)
     }
+
+    test("testChangeStampChangesOnAppendAndClear") {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("safenet-stamp-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let log = EventLog(url: dir.appendingPathComponent("events.jsonl"))
+        let s0 = log.changeStamp()
+        expectEqual(log.changeStamp(), s0, "stable without changes")
+        log.append(Event(date: Date(), kind: .networkChanged, app: nil, detail: "x"))
+        let s1 = log.changeStamp()
+        expect(s1 != s0)
+        log.clear()
+        expect(log.changeStamp() != s1)
+    }
 }

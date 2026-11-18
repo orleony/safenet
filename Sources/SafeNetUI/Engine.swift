@@ -182,6 +182,7 @@ public final class Engine {
         var left = deps.freezer.reconcile()
         var tries = 0
         while !left.isEmpty && tries < 5 { usleep(100_000); left = deps.freezer.reconcile(); tries += 1 }
+        guardian.adoptUnresolved(left)               // keep retrying them every tick
 
         guardian.onChange = { [weak self] _ in self?.publish() }
         guardian.onCheckRequested = { [weak self] in self?.checkNow() }
@@ -282,8 +283,14 @@ public final class Engine {
             // Unchanged IP: keep the last FULL answers (country included) and re-evaluate (DNS,
             // routes, trusted network may have changed).
         } else {
+            let before = Engine.confirmed(Engine.quorumAnswers(lastAnswers), minAgree: config.minAgree)
             lastAnswers = answers
             lastFullAt = deps.clock.uptime
+            let now = Engine.confirmed(Engine.quorumAnswers(answers), minAgree: config.minAgree)
+            if let b = before, let n = now, b.ip != n.ip {
+                // Local history only; the address itself is not written (and never notified).
+                deps.log.append(Event(date: deps.clock.now, kind: .ipChanged, app: nil, detail: ""))
+            }
         }
         evaluateAndApply()
         if recheck { recheck = false; check(.full) }

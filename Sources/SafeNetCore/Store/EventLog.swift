@@ -53,6 +53,17 @@ public final class EventLog {
         self.maxBytes = EventLog.maxBytes
     }
 
+    /// Cheap change detector for readers (size + modification time of the log and its stats
+    /// file): equal stamps mean nothing to reload.
+    public func changeStamp() -> String {
+        func part(_ u: URL) -> String {
+            var st = stat()
+            guard stat(u.path, &st) == 0 else { return "-" }
+            return "\(st.st_size).\(st.st_mtimespec.tv_sec).\(st.st_mtimespec.tv_nsec)"
+        }
+        return part(url) + "|" + part(statsURL)
+    }
+
     private func encoder() -> JSONEncoder {
         let e = JSONEncoder(); e.dateEncodingStrategy = .iso8601; e.outputFormatting = [.sortedKeys]; return e
     }

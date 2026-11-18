@@ -332,7 +332,10 @@ func registerIPCServerTests() {
     test("testIPCEarlyDisconnectsNeverKillTheProcess") {
         // SIGPIPE regression: a client that sends a request and closes at once must not terminate
         // the server process (the reply write hits a closed peer). Deliberately NOT ignoring the
-        // signal here: the server itself has to make the process safe.
+        // signal here: the server itself has to make the process safe. TestKit ignores SIGPIPE for
+        // the whole run, so restore the default action first (and TestKit's afterwards).
+        signal(SIGPIPE, SIG_DFL)
+        defer { signal(SIGPIPE, SIG_IGN) }
         let r = IRig()
         try r.server.start()
         for i in 0..<200 {

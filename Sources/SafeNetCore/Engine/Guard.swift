@@ -162,6 +162,13 @@ public final class Guard {
     /// Maintenance without a new observation (retries, catch-up freezing).
     public func tick() { perform { reconcileProcesses() } }
 
+    /// Pids still stopped from an earlier run (start-up reconcile could not resume them): retried
+    /// on every tick like any unresolved resume, also while other apps are frozen.
+    public func adoptUnresolved(_ pids: Set<Int32>) {
+        guard !pids.isEmpty else { return }
+        perform { pending.formUnion(pids); reconcileProcesses() }
+    }
+
     /// User pause: protection off, all apps resumed, protection returns after `d` (max 24 h).
     public func pause(for d: TimeInterval) {
         guard d.isFinite, d > 0 else { return }

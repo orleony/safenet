@@ -605,4 +605,17 @@ func registerEngineTests() {
         expectEqual(try? r.store.load(), before, "file untouched")
         if case .invalid = r.engine.updateConfig({ $0.minAgree = 0 }) {} else { expect(false, "min_agree 0") }
     }
+
+    test("testEngineLogsIPChangedWithoutTheAddress") {
+        let r = ERig(config: tiered())
+        r.engine.start(watchConfig: false)
+        r.engine.networkChanged(online)
+        r.answers = [a("9.9.9.9", "RU"), a("9.9.9.9", "RU")]
+        r.engine.checkNow()
+        let ev = r.engine.log.recent(limit: 50, kinds: [.ipChanged])
+        expectEqual(ev.count, 1)
+        expectEqual(ev.first?.detail, "", "no IP in the event")
+        r.engine.checkNow()
+        expectEqual(r.engine.log.recent(limit: 50, kinds: [.ipChanged]).count, 1, "unchanged: no new event")
+    }
 }

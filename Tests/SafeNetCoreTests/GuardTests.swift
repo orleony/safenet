@@ -857,4 +857,18 @@ func registerGuardC2Tests() {
         g.didWake()
         if case .paused = g.state { expect(false, "pause must be over") }
     }
+
+    test("testAdoptedLeftoversAreRetriedWhileAppsAreFrozen") {
+        let other = gproc(300, "Other")
+        let r = Rig(procs: [gproc(100, "Claude"), gproc(200, "Telegram"), other])
+        r.freezer.freeze([other])                     // a previous run left 300 stopped
+        let g = r.guardian
+        g.apply(bad)                                  // claude + telegram frozen
+        g.tick()
+        expect(!r.sig.pids(SIGCONT).contains(300), "not retried while apps are engaged (the bug)")
+        g.adoptUnresolved([300])
+        g.tick()
+        expect(r.sig.pids(SIGCONT).contains(300), "adopted leftover resumed")
+        expectEqual(g.frozenApps, ["claude", "telegram"])
+    }
 }

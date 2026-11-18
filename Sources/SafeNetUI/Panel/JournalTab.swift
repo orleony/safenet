@@ -9,6 +9,8 @@ struct JournalTab: View {
     @State private var events: [Event] = []
     @State private var stats = Stats()
     @State private var confirmClear = false
+    /// Stamp of the files last loaded; status changes reload only when it differs.
+    @State private var loadedStamp: String?
 
     static let limit = 300
 
@@ -22,7 +24,7 @@ struct JournalTab: View {
                     .buttonStyle(SNButtonStyle(kind: .danger, theme: theme)).fixedSize()
                     .disabled(model.eventLog == nil)
                     .confirmationDialog("Очистить журнал и статистику?", isPresented: $confirmClear) {
-                        Button("Очистить", role: .destructive) { model.eventLog?.clear(); reload() }
+                        Button("Очистить", role: .destructive) { model.eventLog?.clear(); reload(force: true) }
                         Button("Отмена", role: .cancel) {}
                     } message: { Text("Это действие нельзя отменить.") }
             }
@@ -32,9 +34,9 @@ struct JournalTab: View {
                 counter("\(stats.closed)", "Закрытий", "xmark.circle", p.danger)
             }
             HStack(spacing: theme.smallGap) {
-                Chip(title: "Все", selected: filter == nil) { filter = nil; reload() }
+                Chip(title: "Все", selected: filter == nil) { filter = nil; reload(force: true) }
                 ForEach(EventText.filters, id: \.title) { f in
-                    Chip(title: f.title, selected: filter == f.kinds) { filter = f.kinds; reload() }
+                    Chip(title: f.title, selected: filter == f.kinds) { filter = f.kinds; reload(force: true) }
                 }
             }
             Card {
@@ -55,15 +57,26 @@ struct JournalTab: View {
                 if events.count >= JournalTab.limit { Note("Показаны последние \(JournalTab.limit) событий") }
             }
         }
-        .onAppear(perform: reload)
-        // New events arrive with status changes: refresh then.
-        .onReceive(model.$status) { _ in reload() }
+        .onAppear { reload(force: true) }
+        // New events arrive with status changes: reload then, but only when the files changed,
+        // and read them off the main thread.
+        .onReceive(model.$status) { _ in reload(force: false) }
     }
 
-    private func reload() {
+    private func reload(force: Bool) {
         guard let log = model.eventLog else { return }
-        events = log.recent(limit: JournalTab.limit, kinds: filter)
-        stats = log.stats()
+        let stamp = log.changeStamp()
+        if !force && stamp == loadedStamp { return }
+        loadedStamp = stamp
+        let kinds = filter
+        DispatchQueue.global(qos: .userInitiated).async {
+            let e = log.recent(limit: JournalTab.limit, kinds: kinds)
+            let s = log.stats()
+            DispatchQueue.main.async {
+                guard kinds == filter else { return }       // a newer filter is loading
+                events = e; stats = s
+            }
+        }
     }
 
     private func color(_ k: EventKind) -> RGB {

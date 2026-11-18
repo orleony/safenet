@@ -95,6 +95,12 @@ struct SystemSettings: View {
                         .accessibilityLabel("Запускать при входе в систему")
                 }
                 if let e = model.autostartError { Note(e, symbol: "xmark.octagon", color: p.danger) }
+                if model.autostartState == .requiresApproval {
+                    Note("Автозапуск требует подтверждения в Системных настройках → «Основные» → «Объекты входа»: пока его не разрешить, SafeNet при входе не запустится.",
+                         symbol: "exclamationmark.triangle", color: p.frozen)
+                    Button("Открыть «Объекты входа»") { model.openLoginItemsSettings() }
+                        .buttonStyle(SNButtonStyle(kind: .secondary, theme: theme)).fixedSize()
+                }
                 SettingRow("Файл настроек", detail: "config.yaml в ~/Library/Application Support/SafeNet") {
                     Button("Показать файл настроек") { model.revealConfig() }
                         .buttonStyle(SNButtonStyle(kind: .secondary, theme: theme)).fixedSize()
@@ -108,5 +114,6 @@ struct SystemSettings: View {
                 Note("Приватность. Наружу уходят только запросы к IP-сервисам (каждые 5 с — Cloudflare 1.1.1.1 и api.country.is; полная проверка с ipinfo.io, ipapi.co, ifconfig.co, v6.ident.me — при смене сети, по кнопке и раз в 10 минут) и к /cdn-cgi/trace пяти ИИ-сервисов. Никакой телеметрии, аналитики и обновлений; настройки и журнал остаются на этом Mac.")
             }
         }
+        .onAppear { model.refreshAutostart() }
     }
 }

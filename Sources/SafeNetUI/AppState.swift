@@ -10,6 +10,8 @@ public final class AppState: ObservableObject {
     @Published public private(set) var status = EngineStatus()
     @Published public private(set) var config: Config
     @Published public private(set) var autostartEnabled = Autostart.isEnabled
+    /// Read again on panel appear and app activation (approval happens in System Settings).
+    @Published public private(set) var autostartState = Autostart.current
     /// Separate message channels, so one kind never wipes another:
     /// config load/save errors (cleared once a load or save succeeds again) ...
     @Published public private(set) var configError: String?
@@ -37,6 +39,7 @@ public final class AppState: ObservableObject {
     private let notifier = Notifier()
     private var tracker = NoticeTracker()
     private var sessionApps: [String] = []
+    private var activationObserver: NSObjectProtocol?
 
     // Brief interface (Task 9): convenience views of the status.
     public var state: GuardState { status.state }
@@ -58,7 +61,13 @@ public final class AppState: ObservableObject {
         system.onConfigHealthy = { [weak self] in self?.configHealthy() }
         system.onNotice = { [weak self] e in self?.receiveNotice(e) }
         configReadOnly = system.configReadOnly
+        activationObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            self?.refreshAutostart()
+        }
     }
+
+    deinit { if let o = activationObserver { NotificationCenter.default.removeObserver(o) } }
 
     /// Static instance for previews / UI tests (no engine). `log` feeds the journal tab.
     public init(preview config: Config, status: EngineStatus, testMode: TestMode? = nil, systemScheme: ColorScheme = .dark,
@@ -122,8 +131,19 @@ public final class AppState: ObservableObject {
 
     public func setAutostart(_ on: Bool) {
         do { try Autostart.set(on); autostartError = nil } catch { autostartError = "Автозапуск: \((error as? Autostart.Unavailable)?.description ?? Engine.safeDescription(error))" }
-        autostartEnabled = Autostart.isEnabled
+        refreshAutostart()
     }
+
+    /// Re-reads the login-item status (the user may have approved it in System Settings).
+    public func refreshAutostart() {
+        guard system != nil else { return }
+        let s = Autostart.current
+        if s != autostartState { autostartState = s }
+        let on = [.on, .requiresApproval].contains(s)
+        if on != autostartEnabled { autostartEnabled = on }
+    }
+
+    public func openLoginItemsSettings() { Autostart.openLoginItemsSettings() }
 
     public func dismissNotice() { notice = nil }
 

@@ -56,6 +56,7 @@ public struct PanelView: View {
         }
         .frame(minWidth: 680, minHeight: 460)
         .background(p.background.swiftUIColor)
+        .onAppear { model.refreshAutostart() }
     }
 
     private var sidebar: some View {

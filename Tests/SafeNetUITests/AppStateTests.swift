@@ -60,4 +60,12 @@ func registerAppStateTests() {
         m.runDeepCheck()
         expect(!m.deepCheckRunning, "no engine: never stuck in 'running'")
     }
+
+    test("testAutostartStateMapping") {
+        expectEqual(Autostart.state(.enabled, available: true), .on)
+        expectEqual(Autostart.state(.requiresApproval, available: true), .requiresApproval, "not shown as off")
+        expectEqual(Autostart.state(.notRegistered, available: true), .off)
+        expectEqual(Autostart.state(.notFound, available: true), .off)
+        expectEqual(Autostart.state(.enabled, available: false), .unavailable)
+    }
 }

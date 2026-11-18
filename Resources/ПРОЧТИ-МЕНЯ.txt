@@ -43,14 +43,16 @@ SafeNet подписан без сертификата разработчика 
 
 Первая настройка (важно)
 ------------------------
+Сначала разрешённые адреса, потом приложения:
 1. Щёлкните по значку SafeNet в строке меню → «Открыть панель».
-2. Вкладка «Приложения»: отметьте, какие приложения защищать.
-3. Вкладка «Разрешено»: укажите страны (например NL) и/или IP-адреса и подсети
+2. Вкладка «Разрешено»: укажите страны (например NL) и/или IP-адреса и подсети
    вашего VPN. Проще всего: включите VPN и нажмите «Разрешить этот IP» в меню
    SafeNet (или на вкладке «Обзор»).
+3. Вкладка «Приложения»: отметьте, какие приложения защищать.
 
-Пока список разрешённого пуст, выбранные приложения будут ЗАМОРОЖЕНЫ —
-так задумано: SafeNet не знает, какой IP считать безопасным.
+Если выбрать приложения раньше, чем разрешённые адреса, они будут ЗАМОРОЖЕНЫ
+(но не закрыты) до тех пор, пока вы не укажете страну или IP: SafeNet не знает,
+какой IP считать безопасным. Приложения оживут сразу после этого.
 
 Пауза: меню в строке меню → «Пауза» (5 мин, 15 мин, 1 час) — временно
 отключает защиту. Пока приложения заморожены, в меню есть «Продлить»
@@ -171,8 +173,8 @@ SafeNet.app to Applications. It is ad-hoc signed and not notarised, so on first
 launch right-click → Open, or on macOS 15/26 use System Settings → Privacy &
 Security → "Open Anyway", or run
 `xattr -dr com.apple.quarantine /Applications/SafeNet.app`. Then open the panel,
-pick the apps to protect and allow your VPN's countries/IPs (with an empty allow
-list the protected apps stay frozen, by design). Settings live in
+first allow your VPN's countries/IPs, then pick the apps to protect (with an empty
+allow list the protected apps stay frozen, but are never closed, until you allow one). Settings live in
 ~/Library/Application Support/SafeNet/config.yaml. Network events are handled
 within tens to hundreds of milliseconds, but a silent IP change is only caught by
 polling (default every 5 s), so keep your VPN's own kill switch on. Only IP-lookup

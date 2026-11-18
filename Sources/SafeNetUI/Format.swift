@@ -27,6 +27,7 @@ public enum Format {
         case .networkChanged: return "сеть изменилась, идёт проверка"
         case .offline: return "нет сети"
         case .freezeFailed: return "не удалось заморозить приложение"
+        case .noAllowList: return "нет разрешённых адресов — укажите страну или IP"
         }
     }
 

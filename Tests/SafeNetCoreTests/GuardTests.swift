@@ -805,4 +805,34 @@ func registerGuardC2Tests() {
         expectEqual(g.unprotectableApps, [])
         expect(!g.notRunningApps.contains("claude"))
     }
+
+    // MARK: C3: empty allow list freezes without a close countdown
+
+    test("testEmptyAllowListFreezesWithoutCloseDeadline") {
+        var c = baseConfig(); c.allow = AllowList()
+        let r = Rig(c); let g = r.guardian
+        g.networkChanged()                            // start-up precautionary freeze
+        g.apply(good)
+        expectEqual(g.frozenApps, ["claude", "telegram"])
+        expectEqual(reason(g.state), .noAllowList)
+        expectEqual(deadline(g.state), .some(nil), "no countdown")
+        r.clock.advance(by: 600)
+        expectEqual(r.sig.pids(SIGTERM), [], "never closed for an empty allow list")
+        expectEqual(r.sig.pids(SIGKILL), [])
+        g.networkChanged()                            // a later network change: still no countdown
+        g.apply(good)
+        r.clock.advance(by: 600)
+        expectEqual(r.sig.pids(SIGTERM), [])
+        var ok = c; ok.allow = AllowList(countries: ["NL"])
+        g.updateConfig(ok)
+        expectEqual(g.state, .ok, "allowing a country resumes them")
+    }
+    test("testEmptyPerAppRuleOnlyThatAppWithoutDeadline") {
+        var c = baseConfig(); c.appRules["telegram"] = AllowList()
+        let r = Rig(c); let g = r.guardian
+        g.apply(bad)
+        r.clock.advance(by: 25)
+        expectEqual(r.closedBatches, [[100]], "claude closes after grace, telegram (empty rule) never")
+        expectEqual(g.frozenApps, ["telegram"])
+    }
 }

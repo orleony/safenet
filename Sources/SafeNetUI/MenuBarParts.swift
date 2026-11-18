@@ -177,7 +177,7 @@ struct FirstRunCard: View {
         VStack(alignment: .leading, spacing: theme.smallGap) {
             Text("Выберите разрешённые страны или IP")
                 .font(theme.font(12, weight: .semibold)).foregroundColor(p.text.swiftUIColor)
-            Text("Пока список пуст, выбранные приложения будут заморожены.")
+            Text("Пока список пуст, выбранные приложения заморожены (но не закрываются), пока вы не укажете разрешённую страну или IP.")
                 .font(theme.font(11)).foregroundColor(p.muted.swiftUIColor)
                 .fixedSize(horizontal: false, vertical: true)
             if let a = model.lastIP {

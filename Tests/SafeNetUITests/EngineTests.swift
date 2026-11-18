@@ -545,4 +545,19 @@ func registerEngineTests() {
                "no previous confirmation")
         expect(!Engine.cheapConfirms([], last: full, minAgree: 2, cheapCount: 2))
     }
+
+    test("testEngineFirstRunEmptyAllowListNeverCloses") {
+        var c = cfg(countries: []); c.routeCheck = false
+        let r = ERig(config: c)
+        r.engine.start(watchConfig: false)
+        r.engine.networkChanged(online)
+        expectEqual(r.engine.guardian.frozenApps, ["telegram"])
+        if case .frozen(_, let reason, let d) = r.engine.status.state {
+            expectEqual(reason, .noAllowList); expectEqual(d, nil)
+        } else { expect(false, "not frozen: \(r.engine.status.state)") }
+        r.clock.advance(by: 300)
+        expectEqual(r.sig.pids(SIGTERM), [], "first run: frozen, never closed")
+        expect(r.engine.allowCurrentCountry())
+        expectEqual(r.engine.status.state, .ok)
+    }
 }

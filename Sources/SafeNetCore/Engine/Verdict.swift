@@ -7,6 +7,8 @@ public enum Reason: Equatable {
     /// Produced only by `Guard`: the app should be frozen but its processes could not be stopped
     /// (journal not writable, SIGSTOP failed). It is running unrestricted; the countdown still runs.
     case freezeFailed
+    /// The app's effective allow list is empty (first run): frozen, but never closed for this.
+    case noAllowList
 }
 
 public enum Verdict: Equatable {
@@ -43,6 +45,7 @@ public func effectiveAllow(for app: String, in config: Config) -> AllowList {
 /// Pure policy. Evaluation order (first match wins; any uncertainty = freeze):
 ///  1. offline            -> .offline (checked before everything, trusted network included: no link, nothing to trust)
 ///  2. trusted network    -> .ok (online on a known network: VPN not required, leak/IP checks skipped)
+///     empty allow list   -> freeze(.noAllowList) (nothing can pass; the Guard never closes for it)
 ///  3. ipv6 / route leak  -> freeze (always); dns leak -> freeze only in .block mode (.warn/.off never freeze here)
 ///  4. confirmation       -> need >= minAgree answers with identical IP AND country (minAgree < 1 is treated as 1);
 ///                           none, or several different groups reaching quorum -> .unconfirmed
@@ -51,6 +54,7 @@ public func effectiveAllow(for app: String, in config: Config) -> AllowList {
 public func evaluate(_ o: Observation, allow: AllowList, minAgree: Int, dnsCheck: DNSCheckMode) -> Verdict {
     guard o.online else { return .offline }
     if o.trustedNetwork { return .ok }
+    if allow.ips.isEmpty && allow.countries.isEmpty { return .freeze(.noAllowList) }
     if o.ipv6Leak { return .freeze(.ipv6Leak) }
     if o.routeLeak { return .freeze(.routeLeak) }
     if o.dnsLeak && dnsCheck == .block { return .freeze(.dnsLeak) }

@@ -229,6 +229,8 @@ public final class Guard {
                 if off {
                     startFreeze(&a, .offline, deadline: nil)
                     a.precautionary = true
+                } else if emptyAllow(id) {
+                    startFreeze(&a, .noAllowList, deadline: nil)   // first run: never closed
                 } else {
                     startFreeze(&a, .networkChanged, deadline: clock.uptime + grace(id))
                 }
@@ -245,7 +247,7 @@ public final class Guard {
             sleeping = false
             if let u = pausedUntil, clock.now >= u { endPause() }
             let up = clock.uptime
-            for id in ids() where apps[id]?.phase == .frozen && apps[id]?.deadline != nil {
+            for id in ids() where apps[id]?.phase == .frozen && apps[id]?.deadline != nil && !emptyAllow(id) {
                 apps[id]?.deadline = up + grace(id)
             }
             requestCheck()
@@ -298,6 +300,11 @@ public final class Guard {
                 return
             }
             a.reason = .offline; a.deadline = nil          // countdown suspended, never closes offline
+        case (.freeze(.noAllowList), .ok):
+            startFreeze(&a, .noAllowList, deadline: nil)   // like offline: frozen, never closed
+        case (.freeze(.noAllowList), .frozen):
+            a.reason = .noAllowList; a.deadline = nil
+            a.precautionary = false
         case (.freeze(let r), .ok):
             startFreeze(&a, r, deadline: clock.uptime + grace(id))
         case (.freeze(let r), .frozen):
@@ -392,7 +399,9 @@ public final class Guard {
     /// (none while offline).
     private func reopen(_ a: inout AppStatus, _ id: String) {
         let off = lastObservation.map { !$0.online } ?? false
-        startFreeze(&a, off ? .offline : a.reason, deadline: off ? nil : clock.uptime + grace(id))
+        let none = emptyAllow(id)
+        startFreeze(&a, off ? .offline : none ? .noAllowList : a.reason,
+                    deadline: off || none ? nil : clock.uptime + grace(id))
     }
 
     /// A pid waiting for resume that belongs to an app which is frozen again (it matches the app,
@@ -513,6 +522,10 @@ public final class Guard {
 
     private func ids() -> [String] { AppCatalog.appIDs(in: config) }
     private func grace(_ id: String) -> TimeInterval { config.appGrace[id] ?? config.grace }
+    private func emptyAllow(_ id: String) -> Bool {
+        let a = effectiveAllow(for: id, in: config)
+        return a.ips.isEmpty && a.countries.isEmpty
+    }
     private func frozenSet() -> Set<String> {
         Set(apps.filter { $0.value.phase == .frozen && !$0.value.freezeFailed }.keys)
     }

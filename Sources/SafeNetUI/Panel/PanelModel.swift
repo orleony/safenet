@@ -235,7 +235,7 @@ public enum EventText {
 
     static func reason(_ code: String) -> Reason? {
         let all: [Reason] = [.ipNotAllowed, .countryNotAllowed, .unconfirmed, .ipv6Leak, .dnsLeak, .routeLeak,
-                             .networkChanged, .offline, .freezeFailed]
+                             .networkChanged, .offline, .freezeFailed, .noAllowList]
         return all.first { "\($0)" == code }
     }
 

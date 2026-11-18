@@ -101,7 +101,10 @@ func registerVerdictTests() {
         expectEqual(evaluate(o, allow: effectiveAllow(for: "Other", in: cfg), minAgree: 2, dnsCheck: .warn), .ok)
     }
     test("testEmptyAllowListAllowsNothing") {
-        expectEqual(evaluate(obs([("1.2.3.4", "NL"), ("1.2.3.4", "NL")]), allow: AllowList(), minAgree: 2, dnsCheck: .warn), .freeze(.ipNotAllowed))
+        expectEqual(evaluate(obs([("1.2.3.4", "NL"), ("1.2.3.4", "NL")]), allow: AllowList(), minAgree: 2, dnsCheck: .warn), .freeze(.noAllowList))
+        var leaky = obs([("1.2.3.4", "NL"), ("1.2.3.4", "NL")]); leaky.routeLeak = true
+        expectEqual(evaluate(leaky, allow: AllowList(), minAgree: 2, dnsCheck: .warn), .freeze(.noAllowList), "empty list decides first")
+        expectEqual(evaluate(obs([]), allow: AllowList(), minAgree: 2, dnsCheck: .warn), .freeze(.noAllowList))
     }
     test("testConflictingQuorumsAreUnconfirmed") {
         expectEqual(evaluate(obs([("1.2.3.4", "NL"), ("5.6.7.8", "RU")]), allow: nl, minAgree: 1, dnsCheck: .warn), .freeze(.unconfirmed))

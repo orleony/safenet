@@ -6,6 +6,7 @@ import SafeNetCore
 final class AppDelegate: NSObject, NSApplicationDelegate {
     static var model: AppState?
     private var outsideClickMonitor: Any?
+    private var localClickMonitor: Any?
 
     func applicationWillFinishLaunching(_ notification: Notification) {
         // Menu-bar agent: no Dock icon (works for the bare binary and the .app with LSUIElement).
@@ -18,13 +19,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // A menu-bar agent is never active, so a click on the desktop / another app does not make
         // the MenuBarExtra window resign key. Close it on any click outside SafeNet ourselves.
         outsideClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { _ in
-            for w in NSApp.windows where w.isVisible && String(describing: type(of: w)).contains("MenuBarExtra") {
-                w.orderOut(nil)
-            }
+            PanelOpener.dismissMenu()
+        }
+        // Clicks on SafeNet's own windows (e.g. the panel) are not seen by the global monitor.
+        localClickMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { e in
+            if let w = e.window, !(w is NSPanel) { PanelOpener.dismissMenu() }
+            return e
         }
         // SwiftUI may open the first Window scene at launch; the panel opens only on request.
         for w in NSApp.windows where w.identifier?.rawValue.hasPrefix("panel") == true { w.close() }
     }
+
+    func applicationDidResignActive(_ notification: Notification) { PanelOpener.dismissMenu() }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 

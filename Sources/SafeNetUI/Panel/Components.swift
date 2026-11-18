@@ -30,6 +30,7 @@ enum PanelOpener {
     /// remembered content action, else through the Window menu item. Reports (asynchronously,
     /// main thread) whether a visible panel window exists afterwards.
     static func openFromCLI(done: @escaping (Bool) -> Void) {
+        dismissMenu()
         var opts: NSApplication.ActivationOptions = []
         if #unavailable(macOS 14) { opts.insert(.activateIgnoringOtherApps) }
         NSRunningApplication.current.activate(options: opts)
@@ -52,7 +53,17 @@ enum PanelOpener {
         DispatchQueue.main.async(execute: check)
     }
 
+    /// Hides the MenuBarExtra popover (never the status item's own window, never the panel).
+    static func dismissMenu() {
+        for w in NSApp.windows where w.isVisible && w is NSPanel {
+            let cls = String(describing: type(of: w))
+            if cls.contains("StatusBar") || w.identifier?.rawValue.hasPrefix("panel") == true { continue }
+            if cls.contains("MenuBarExtra") || w.level.rawValue >= NSWindow.Level.statusBar.rawValue { w.orderOut(nil) }
+        }
+    }
+
     static func open(_ openWindow: OpenWindowAction) {
+        dismissMenu()
         var opts: NSApplication.ActivationOptions = []
         if #unavailable(macOS 14) { opts.insert(.activateIgnoringOtherApps) }
         NSRunningApplication.current.activate(options: opts)

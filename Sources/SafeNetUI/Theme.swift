@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 import SafeNetCore
 import Combine
 
@@ -44,7 +45,28 @@ public final class Theme: ObservableObject {
         }
     }
 
-    public func update(config: Config) { self.config = config; resolve() }
+    /// `NSApp.appearance` for a theme choice: nil follows the system. Needed besides
+    /// `.preferredColorScheme`: on macOS 13/14 `.preferredColorScheme(nil)` does not reset an
+    /// appearance SwiftUI already forced on a window, so "как в системе" would stick.
+    public static func appearanceName(for t: ThemeChoice) -> NSAppearance.Name? {
+        switch t {
+        case .light: return .aqua
+        case .dark: return .darkAqua
+        case .system: return nil
+        }
+    }
+
+    /// Sets the app-wide appearance (main thread; no-op before NSApplication exists, e.g. tests).
+    public func applyAppAppearance() {
+        guard let app = NSApp as NSApplication? else { return }
+        app.appearance = Theme.appearanceName(for: config.theme).flatMap { NSAppearance(named: $0) }
+    }
+
+    public func update(config: Config) {
+        let changed = config.theme != self.config.theme
+        self.config = config; resolve()
+        if changed { applyAppAppearance() }
+    }
     public func update(systemScheme: ColorScheme) {
         guard systemScheme != self.systemScheme else { return }
         self.systemScheme = systemScheme; resolve()

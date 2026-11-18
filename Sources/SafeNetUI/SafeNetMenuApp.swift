@@ -9,6 +9,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillFinishLaunching(_ notification: Notification) {
         // Menu-bar agent: no Dock icon (works for the bare binary and the .app with LSUIElement).
         NSApp.setActivationPolicy(.accessory)
+        AppDelegate.model?.theme.applyAppAppearance()
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {

@@ -139,4 +139,10 @@ func registerSystemAppearanceTests() {
         forced.update(config: cfg)
         expectEqual(forced.forcedScheme, .dark)
     }
+
+    test("testAppAppearanceMappingResetsToSystem") {
+        expectEqual(Theme.appearanceName(for: .light), .aqua)
+        expectEqual(Theme.appearanceName(for: .dark), .darkAqua)
+        expectEqual(Theme.appearanceName(for: .system), nil, "nil = follow the system (resets a forced one)")
+    }
 }

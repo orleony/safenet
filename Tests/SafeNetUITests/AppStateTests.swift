@@ -2,8 +2,8 @@ import Foundation
 import SafeNetCore
 @testable import SafeNetUI
 
-private func previewState(_ c: Config = .default) -> AppState {
-    AppState(preview: c, status: EngineStatus())
+private func previewState(_ c: Config = .default, status: EngineStatus = EngineStatus()) -> AppState {
+    AppState(preview: c, status: status)
 }
 
 func registerAppStateTests() {
@@ -43,5 +43,21 @@ func registerAppStateTests() {
     test("testPauseUsesConfiguredDefault") {
         var c = Config.default; c.pauseDefault = 300
         expectEqual(previewState(c).defaultPause, 300)
+    }
+
+    test("testProxyWarningOnlyWithSystemProxy") {
+        var s = EngineStatus()
+        expectEqual(AppState.proxyWarning(s), nil, "no snapshot: no warning")
+        s.snapshot = NetSnapshot(online: true, hasTunnel: true, gatewayIP: nil, gatewayMAC: nil, proxy: nil)
+        expectEqual(AppState.proxyWarning(s), nil)
+        s.snapshot?.proxy = ProxyInfo(socks: "127.0.0.1:7890")
+        expect(AppState.proxyWarning(s)?.contains("TUN") == true)
+        expect(previewState(Config.default, status: s).proxyWarning != nil)
+    }
+    test("testPreviewDeepCheckIsDisabledAndNeverRuns") {
+        let m = previewState()
+        expect(!m.canDeepCheck)
+        m.runDeepCheck()
+        expect(!m.deepCheckRunning, "no engine: never stuck in 'running'")
     }
 }

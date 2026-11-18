@@ -22,6 +22,9 @@ public final class AppState: ObservableObject {
     @Published public private(set) var shownApps: [String] = []
     /// Last deep check ("Проверка" tab), kept while the app runs.
     @Published public internal(set) var lastDeepCheck: DeepCheckData?
+    /// A deep check is in flight (kept here, not in the view: switching tabs must not allow a
+    /// second run).
+    @Published public private(set) var deepCheckRunning = false
 
     public let testMode: TestMode?
     /// Test mode without SAFENET_CONFIG_DIR: nothing is saved (shown in the window).
@@ -80,6 +83,14 @@ public final class AppState: ObservableObject {
     /// First run: selected apps would freeze forever because nothing is allowed.
     public var needsAllowSetup: Bool { Engine.needsAllowSetup(config) }
 
+    public static let proxyWarningText = "Включён системный прокси: программы командной строки (например, Claude Code) его обходят и идут в сеть напрямую, а SafeNet видит IP прокси — используйте режим TUN / полного туннеля VPN."
+    /// R4 (warn only): a system proxy is set, so SafeNet's own checks go through it while
+    /// command-line tools ignore it.
+    public static func proxyWarning(_ s: EngineStatus) -> String? { s.snapshot?.proxy != nil ? proxyWarningText : nil }
+    public var proxyWarning: String? { AppState.proxyWarning(status) }
+    /// Deep check is possible (false in previews: no engine).
+    public var canDeepCheck: Bool { system != nil }
+
     // MARK: Actions (forwarded to the engine queue)
 
     public func toggleApp(_ id: String) {
@@ -120,10 +131,14 @@ public final class AppState: ObservableObject {
 
     public var eventLog: EventLog? { system?.engine.log ?? previewLog }
 
-    /// Runs the on-demand deep check off the main thread; `done` is called on the main queue.
-    public func runDeepCheck(_ done: @escaping (DeepCheckData) -> Void) {
-        guard let s = system else { return }
-        s.deepCheck { d in DispatchQueue.main.async { [weak self] in self?.lastDeepCheck = d; done(d) } }
+    /// Runs the on-demand deep check off the main thread (ignored while one runs or without an
+    /// engine); the result lands in `lastDeepCheck` on the main queue.
+    public func runDeepCheck() {
+        guard let s = system, !deepCheckRunning else { return }
+        deepCheckRunning = true
+        s.deepCheck { d in
+            DispatchQueue.main.async { [weak self] in self?.lastDeepCheck = d; self?.deepCheckRunning = false }
+        }
     }
 
     public var configURL: URL? { system?.paths.config }

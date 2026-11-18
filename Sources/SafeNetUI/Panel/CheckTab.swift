@@ -5,27 +5,27 @@ import SafeNetCore
 struct CheckTab: View {
     @ObservedObject var model: AppState
     @EnvironmentObject var theme: Theme
-    @State private var running = false
-    @State private var result: DeepCheckData?
+    /// Renders/previews: a finished check shown instead of the model's.
+    private let preset: DeepCheckData?
 
-    /// `preset` lets renders/previews show a finished check.
     init(model: AppState, preset: DeepCheckData? = nil) {
         self.model = model
-        _result = State(initialValue: preset ?? model.lastDeepCheck)
+        self.preset = preset
     }
+
+    private var running: Bool { model.deepCheckRunning }
+    private var result: DeepCheckData? { model.lastDeepCheck ?? preset }
 
     var body: some View {
         let p = theme.palette
         VStack(alignment: .leading, spacing: theme.spacing + 2) {
             SectionHeader(title: "Проверка на утечки",
-                          subtitle: "Опрашивает каждый IP-сервис отдельно, проверяет IPv6, DNS-серверы и маршрут до пяти ИИ-сервисов. Запросы уходят только IP-сервисам и на /cdn-cgi/trace этих ИИ-сервисов.")
+                          subtitle: "Опрашивает каждый IP-сервис отдельно, проверяет IPv6, DNS-серверы и маршрут до пяти ИИ-сервисов. Запросы уходят только IP-сервисам и на /cdn-cgi/trace этих ИИ-сервисов — по кнопке, даже если защищаемых приложений нет.")
+            if let w = model.proxyWarning { Note(w, symbol: "exclamationmark.triangle", color: p.danger) }
             HStack(spacing: theme.spacing - 4) {
-                Button(running ? "Проверяю…" : "Проверить на утечки") {
-                    running = true
-                    model.runDeepCheck { d in result = d; running = false }
-                }
+                Button(running ? "Проверяю…" : "Проверить на утечки") { model.runDeepCheck() }
                 .buttonStyle(SNButtonStyle(kind: .primary, theme: theme)).fixedSize()
-                .disabled(running)
+                .disabled(running || !model.canDeepCheck)
                 if running { ProgressView().controlSize(.small).accessibilityLabel("Идёт проверка") }
                 if let r = result {
                     Text("Проверено в \(r.finished.formatted(date: .omitted, time: .standard))")

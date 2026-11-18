@@ -36,6 +36,9 @@ struct OverviewTab: View {
                     }
                 }
             }
+            if let w = model.proxyWarning {
+                Card { Note(w, symbol: "exclamationmark.triangle", color: p.danger) }
+            }
             if model.needsAllowSetup { firstRun }
             if case .frozen(let since, let r, let d) = model.state { PanelFrozenCard(model: model, since: since, reason: r, deadline: d) }
             if case .closed(let at) = model.state {
@@ -80,7 +83,7 @@ struct OverviewTab: View {
     private var firstRun: some View {
         Card {
             Text("Выберите разрешённые страны или IP").font(theme.font(13, weight: .semibold)).foregroundColor(theme.palette.text.swiftUIColor)
-            Note("Пока список пуст, выбранные приложения будут заморожены. Сами мы ничего не разрешаем.")
+            Note("Пока список пуст, выбранные приложения заморожены (но не закрываются), пока вы не укажете разрешённую страну или IP. Сами мы ничего не разрешаем.")
             HStack(spacing: theme.spacing - 4) {
                 if let a = model.lastIP {
                     Button("Разрешить \(Format.flag(a.country)) \(Format.countryName(a.country))") { model.allowCurrentCountry() }

@@ -153,6 +153,7 @@ public struct MenuBarView: View {
     private var warnings: [String] {
         var w: [String] = []
         let s = model.status
+        if let pw = model.proxyWarning { w.append(pw) }
         if s.dnsUnknown { w.append("DNS: нет данных о серверах, утечку проверить нельзя") }
         if model.config.dnsCheck == .warn, s.observation?.dnsLeak == true { w.append("Возможна утечка DNS мимо VPN") }
         if model.status.observation?.trustedNetwork == true { w.append("Доверенная сеть: VPN не требуется") }

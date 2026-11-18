@@ -65,3 +65,14 @@ Commands: `status`, `allow [IP | subnet | country]`, `panel`, `config`, `version
 "ТЕСТОВЫЙ РЕЖИМ"); `SAFENET_FAKE_OFFLINE=1` simulates no network; `SAFENET_CONFIG_DIR=<dir>`
 uses another settings directory (always set it in test mode so the real
 `~/Library/Application Support/SafeNet` is not used).
+
+Test runs leave one preferences file (the panel window frame only): from the bundle
+`~/Library/Preferences/local.safenet.app.plist` (`defaults delete local.safenet.app`), from the
+bare binary `~/Library/Preferences/SafeNetApp.plist` (`defaults delete SafeNetApp`).
+
+Known limits worth knowing when testing: the watchdog runs the same executable, so
+`killall -9 SafeNetApp` kills it too and frozen apps stay stopped until SafeNet is started again
+(its start-up reconcile resumes them); closing sends SIGCONT then SIGTERM and lets the app run for
+up to `close_timeout` (5 s) before SIGKILL; any `utun` interface (Tailscale too) counts as a tunnel
+(affects only the DNS heuristic and the "VPN" label); only one SafeNet instance runs per settings
+directory (`safenet.lock`).

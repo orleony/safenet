@@ -7,9 +7,72 @@
 # path). The real ~/Library/Application Support/SafeNet and real apps are never touched. Every
 # process it starts is resumed and killed on exit; the temp dir is removed. Exit code != 0 on any
 # failed check.
+#        scripts/verify-app.sh --selftest-guard   (checks only the temp-dir deletion guard)
 set -uo pipefail
-cd "$(dirname "$0")/.."
-ROOT="$PWD"
+cd "$(dirname "$0")/.." || exit 2
+ROOT="$(pwd -P)"
+[ -n "$ROOT" ] && [ "$ROOT" != / ] || exit 2
+HOME_REAL="$(cd "$HOME" 2>/dev/null && pwd -P)"
+
+# --- temp-dir guard -------------------------------------------------------------------------
+# tmp_ok PATH: true only for an existing, absolute directory whose resolved path has a basename
+# starting with "snverify." and is neither equal to, an ancestor of, nor inside the repository
+# or $HOME (nor "/"). Every recursive delete of the temp dir goes through safe_rm_tmp.
+tmp_ok() {
+    local p="${1:-}" r b x
+    [ -n "$p" ] || return 1
+    case "$p" in /*) ;; *) return 1;; esac
+    [ -d "$p" ] || return 1
+    r="$(cd -P -- "$p" 2>/dev/null && pwd -P)" || return 1
+    [ -n "$r" ] && [ "$r" != / ] || return 1
+    b="$(basename -- "$r")"
+    case "$b" in snverify.?*) ;; *) return 1;; esac
+    for x in "$ROOT" "$HOME_REAL"; do
+        [ -n "$x" ] || return 1
+        [ "$r" = "$x" ] && return 1
+        case "$r/" in "$x"/*) return 1;; esac      # inside x
+        case "$x/" in "$r"/*) return 1;; esac      # ancestor of x
+    done
+    return 0
+}
+safe_rm_tmp() {
+    if tmp_ok "${1:-}"; then rm -rf -- "$1"; return 0; fi
+    echo "verify-app: REFUSING to delete '${1:-}' (not a snverify.* temp dir)" >&2
+    return 1
+}
+
+if [ "${1:-}" = "--selftest-guard" ]; then
+    SF=0
+    expect() { # $1 = accept|reject, $2 = label, $3 = path
+        if tmp_ok "$3"; then got=accept; else got=reject; fi
+        if [ "$got" = "$1" ]; then echo "  ok   guard $1s $2"; else echo "  FAIL guard should $1 $2 ('$3')"; SF=$((SF + 1)); fi
+    }
+    GOOD="$(mktemp -d "${TMPDIR:-/tmp}/snverify.XXXXXX")" || exit 2
+    BADNAME="$(mktemp -d "${TMPDIR:-/tmp}/othername.XXXXXX")" || exit 2
+    INREPO="$ROOT/.build/snverify.selftest"; mkdir -p "$INREPO" || exit 2
+    LINK="$GOOD/snverify.link"; ln -s "$ROOT" "$LINK"
+    expect reject "an empty path" ""
+    expect reject "the repository" "$ROOT"
+    expect reject "\$HOME" "$HOME"
+    expect reject "/" "/"
+    expect reject "a relative path" "snverify.rel"
+    expect reject "a missing directory" "${TMPDIR:-/tmp}/snverify.missing-$$"
+    expect reject "a temp dir without the prefix" "$BADNAME"
+    expect reject "a snverify.* dir inside the repository" "$INREPO"
+    expect reject "a snverify.* symlink to the repository" "$LINK"
+    expect reject "the parent of the repository" "$(dirname "$ROOT")"
+    expect accept "a fresh snverify.* temp dir" "$GOOD"
+    # Remove the fixtures without any recursive delete of a rejected path.
+    rm -f "$LINK"; rmdir "$INREPO" "$BADNAME"
+    safe_rm_tmp "$GOOD" && [ ! -e "$GOOD" ] && echo "  ok   safe_rm_tmp removed the valid temp dir" \
+        || { echo "  FAIL safe_rm_tmp on the valid temp dir"; SF=$((SF + 1)); }
+    D="$(mktemp -d "${TMPDIR:-/tmp}/othername.XXXXXX")" || exit 2
+    if safe_rm_tmp "$D" 2>/dev/null; then echo "  FAIL safe_rm_tmp accepted '$D'"; SF=$((SF + 1))
+    else [ -d "$D" ] && echo "  ok   safe_rm_tmp refused (and kept) a non-prefixed dir"; fi
+    rmdir "$D"
+    [ $SF = 0 ] && { echo "guard selftest: PASSED"; exit 0; }
+    echo "guard selftest: $SF FAILED"; exit 1
+fi
 APP="${1:-$ROOT/dist/SafeNet.app}"
 APP="$(cd "$(dirname "$APP")" && pwd -P)/$(basename "$APP")"
 EXE="$APP/Contents/MacOS/SafeNetApp"
@@ -26,7 +89,7 @@ check() { local what="$1"; shift; if "$@" >/dev/null 2>&1; then pass "$what"; el
 REAL_BEFORE="$( [ -e "$REAL_DIR" ] && ls -la "$REAL_DIR" 2>/dev/null | md5 || echo absent)"
 
 echo "== static checks: $APP"
-check "codesign --verify --deep --strict" codesign --verify --deep --strict "$APP"
+check "codesign --verify --deep --strict" to 60 codesign --verify --deep --strict "$APP"
 SIG="$(codesign -dv "$APP" 2>&1)"
 echo "$SIG" | grep -q '^Signature=adhoc' && pass "ad-hoc signature" || fail "ad-hoc signature"
 echo "$SIG" | grep -q '^Identifier=local.safenet.app' && pass "signing identifier local.safenet.app" || fail "signing identifier"
@@ -50,8 +113,10 @@ check "CLI wrapper executable" test -x "$CLI"
 if xattr -r "$APP" 2>/dev/null | grep -q .; then fail "no extended attributes in bundle"; else pass "no extended attributes in bundle"; fi
 
 echo "== runtime checks (test mode, temp config dir)"
-TMP="$(mktemp -d "${TMPDIR:-/tmp}/snverify.XXXXXX")"
-TMP="$(cd "$TMP" && pwd -P)"
+TMP="$(mktemp -d "${TMPDIR:-/tmp}/snverify.XXXXXX")" || { echo "verify-app: mktemp failed"; exit 2; }
+[ -n "$TMP" ] || { echo "verify-app: mktemp returned nothing"; exit 2; }
+TMP="$(cd -P -- "$TMP" && pwd -P)" || exit 2
+tmp_ok "$TMP" || { echo "verify-app: unsafe temp dir '$TMP'"; exit 2; }
 CFG="$TMP/cfg"; mkdir -p "$CFG"
 SLEEPER="$TMP/snsleeper"
 cp /bin/sleep "$SLEEPER"
@@ -66,10 +131,19 @@ cleanup() {
     for p in $(watchdogs); do kill -9 "$p" 2>/dev/null; done
     [ -n "$SLEEP_PID" ] && { kill -CONT "$SLEEP_PID" 2>/dev/null; kill -9 "$SLEEP_PID" 2>/dev/null; }
     wait 2>/dev/null
-    rm -rf "$TMP"
+    safe_rm_tmp "$TMP" || FAILS=$((FAILS + 1))
 }
-trap cleanup EXIT
+trap 'cleanup; [ $FAILS = 0 ] || exit 1' EXIT
 trap 'exit 130' INT TERM
+
+# Every call that might hang runs under a hard timeout (SIGALRM, exit 142).
+to() { local secs="$1"; shift; perl -e 'alarm shift; exec @ARGV or exit 127' "$secs" "$@"; }
+# Reap the app after it was asked to exit: never block on a process that refused to die.
+reap_app() {
+    if wait_for 10 dead "$APP_PID"; then wait "$APP_PID" 2>/dev/null
+    else kill -9 "$APP_PID" 2>/dev/null; wait "$APP_PID" 2>/dev/null; fi
+    APP_PID=""
+}
 
 write_config() { # $1 = allowed countries (space separated)
     { echo "apps: []"
@@ -121,22 +195,22 @@ wait_for 5 test -S "$SOCK" && pass "socket created" || fail "socket created"
 MODE="$(stat -f '%Lp' "$SOCK" 2>/dev/null)"; [ "$MODE" = 600 ] && pass "socket mode 0600" || fail "socket mode '$MODE'"
 
 # 2. CLI over the socket.
-OUT="$("$CLI" status 2>&1)"; RC=$?
+OUT="$(to 10 "$CLI" status 2>&1)"; RC=$?
 echo "$OUT" | sed 's/^/       | /'
 [ $RC = 0 ] && pass "safenet status exit 0" || fail "safenet status exit $RC"
 for s in "Приложения заморожены" "ТЕСТОВЫЙ РЕЖИМ" "IP: 1.2.3.4 (RU)" "snsleeper: заморожено"; do
     echo "$OUT" | grep -qF "$s" && pass "status contains '$s'" || fail "status contains '$s'"
 done
-OUT="$("$CLI" version 2>&1)"; [ "$OUT" = "SafeNet 1.0.0" ] && pass "safenet version: $OUT" || fail "safenet version: '$OUT'"
-OUT="$("$CLI" config 2>&1)"; [ "$OUT" = "$CFG/config.yaml" ] && pass "safenet config = temp config" || fail "safenet config: '$OUT'"
-OUT="$("$CLI" panel 2>&1)"; RC=$?
+OUT="$(to 10 "$CLI" version 2>&1)"; [ "$OUT" = "SafeNet 1.0.0" ] && pass "safenet version: $OUT" || fail "safenet version: '$OUT'"
+OUT="$(to 10 "$CLI" config 2>&1)"; [ "$OUT" = "$CFG/config.yaml" ] && pass "safenet config = temp config" || fail "safenet config: '$OUT'"
+OUT="$(to 10 "$CLI" panel 2>&1)"; RC=$?
 [ $RC = 0 ] && [ "$OUT" = "Окно SafeNet открыто" ] && pass "safenet panel: $OUT (a visible panel window exists)" || fail "safenet panel: rc $RC '$OUT'"
-"$CLI" bogus >/dev/null 2>&1; RC=$?; [ $RC = 2 ] && pass "unknown command exit 2" || fail "unknown command exit $RC"
-OUT="$("$CLI" allow RU 2>&1)"; RC=$?
+to 10 "$CLI" bogus >/dev/null 2>&1; RC=$?; [ $RC = 2 ] && pass "unknown command exit 2" || fail "unknown command exit $RC"
+OUT="$(to 10 "$CLI" allow RU 2>&1)"; RC=$?
 [ $RC = 0 ] && echo "$OUT" | grep -qF "Разрешена страна RU" && pass "safenet allow RU: $OUT" || fail "safenet allow RU: rc $RC '$OUT'"
 wait_for 10 is_running && pass "sleeper resumed after allow RU" || fail "sleeper resumed after allow RU (stat $(stat_of "$SLEEP_PID"))"
 grep -q -- "- RU" "$CFG/config.yaml" && pass "config.yaml now allows RU" || fail "config.yaml now allows RU"
-OUT="$("$CLI" status 2>&1)"; echo "$OUT" | grep -qF "Защита включена" && pass "status: Защита включена" || fail "status after allow: '$OUT'"
+OUT="$(to 10 "$CLI" status 2>&1)"; echo "$OUT" | grep -qF "Защита включена" && pass "status: Защита включена" || fail "status after allow: '$OUT'"
 
 # 3. Hot reload: removing RU from the file freezes again; a broken file keeps the old settings.
 write_config "NL"
@@ -150,28 +224,28 @@ write_config "NL"; sleep 1
 # 4. SIGTERM: resumes, removes the socket, watchdog exits.
 kill -TERM "$APP_PID"
 wait_for 10 dead "$APP_PID" && pass "app exited on SIGTERM" || fail "app exited on SIGTERM"
-wait "$APP_PID" 2>/dev/null; APP_PID=""
+reap_app
 wait_for 5 is_running && pass "sleeper resumed on SIGTERM" || fail "sleeper resumed on SIGTERM"
 wait_for 5 test ! -e "$SOCK" && pass "socket removed on exit" || fail "socket removed on exit"
 wait_for 5 no_watchdog && pass "watchdog gone" || fail "watchdog gone"
 grep -qE "\"pid\" *: *$SLEEP_PID[^0-9]" "$CFG/frozen.json" 2>/dev/null && fail "journal cleared on exit" || pass "journal cleared on exit"
-"$CLI" status >/dev/null 2>&1; RC=$?; [ $RC = 3 ] && pass "status when not running: exit 3" || fail "status when not running: exit $RC"
+to 10 "$CLI" status >/dev/null 2>&1; RC=$?; [ $RC = 3 ] && pass "status when not running: exit 3" || fail "status when not running: exit $RC"
 
 # 5. kill -9: the watchdog resumes the sleeper.
 start_app
 wait_for 15 is_stopped && pass "relaunch froze the sleeper" || fail "relaunch froze the sleeper"
 wait_for 5 test -S "$SOCK"
 WD="$(watchdogs | head -n 1)"
-kill -9 "$APP_PID"; wait "$APP_PID" 2>/dev/null; APP_PID=""
+kill -9 "$APP_PID"; reap_app
 wait_for 10 is_running && pass "kill -9: watchdog resumed the sleeper" || fail "kill -9: watchdog resumed the sleeper"
 wait_for 10 no_watchdog && pass "kill -9: watchdog exited afterwards" || fail "kill -9: watchdog still running ($WD)"
-"$CLI" status >/dev/null 2>&1; RC=$?; [ $RC = 3 ] && pass "stale socket after kill -9: status exit 3" || fail "stale socket: status exit $RC"
+to 10 "$CLI" status >/dev/null 2>&1; RC=$?; [ $RC = 3 ] && pass "stale socket after kill -9: status exit 3" || fail "stale socket: status exit $RC"
 
 # 6. Restart over the stale socket works, then clean SIGTERM.
 start_app
 wait_for 15 is_stopped && pass "start over a stale socket: frozen again" || fail "start over a stale socket"
-OUT="$("$CLI" status 2>&1)"; echo "$OUT" | grep -qF "Приложения заморожены" && pass "CLI works after stale socket" || fail "CLI after stale socket: '$OUT'"
-kill -TERM "$APP_PID"; wait_for 10 dead "$APP_PID"; wait "$APP_PID" 2>/dev/null; APP_PID=""
+OUT="$(to 10 "$CLI" status 2>&1)"; echo "$OUT" | grep -qF "Приложения заморожены" && pass "CLI works after stale socket" || fail "CLI after stale socket: '$OUT'"
+kill -TERM "$APP_PID"; reap_app
 wait_for 5 is_running && pass "final SIGTERM resumed the sleeper" || fail "final SIGTERM resume"
 wait_for 5 no_watchdog && wait_for 5 test ! -e "$SOCK" && pass "final: no watchdog, no socket" || fail "final: leftovers"
 

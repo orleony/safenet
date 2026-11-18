@@ -25,13 +25,25 @@ The app binary doubles as the console client: `SafeNet.app/Contents/MacOS/SafeNe
 For convenience a small wrapper ships in two places: `dist/safenet` (next to the built app) and
 `SafeNet.app/Contents/Resources/safenet` (travels with the app). It follows symlinks to find the
 app, then falls back to `/Applications/SafeNet.app` and `~/Applications/SafeNet.app`.
-Nothing is put on your PATH automatically. To do it yourself:
+Nothing is put on your PATH automatically. To do it yourself, without admin rights (preferred):
+
+```sh
+# either an alias
+echo 'alias safenet=/Applications/SafeNet.app/Contents/Resources/safenet' >> ~/.zshrc
+# or a symlink in ~/bin
+mkdir -p ~/bin
+ln -s /Applications/SafeNet.app/Contents/Resources/safenet ~/bin/safenet
+echo 'export PATH="$HOME/bin:$PATH"' >> ~/.zshrc
+```
+
+or system-wide, with admin rights:
 
 ```sh
 sudo mkdir -p /usr/local/bin
 sudo ln -s /Applications/SafeNet.app/Contents/Resources/safenet /usr/local/bin/safenet
-safenet status
 ```
+
+Then, in a new terminal: `safenet status`.
 
 Commands: `status`, `allow [IP | subnet | country]`, `panel`, `config`, `version`.
 

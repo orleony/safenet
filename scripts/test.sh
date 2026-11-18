@@ -4,13 +4,14 @@
 # Tests/<Module>Tests directory (TestKit + tests + generated main.swift), runs them.
 # main.swift is generated: it calls every `func registerXxxTests()` found in the test files.
 set -euo pipefail
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/.." || exit 2
 ROOT="$PWD"
 FILTER="${1:-}"
 ARCH="$(uname -m)"
 OUT="$ROOT/.build/test"
 TARGET="$ARCH-apple-macos13"
-rm -rf "$OUT"; mkdir -p "$OUT"
+[ -n "$ROOT" ] && [ "$OUT" = "$ROOT/.build/test" ] || exit 2
+rm -rf -- "$OUT"; mkdir -p "$OUT"
 
 swiftc -target "$TARGET" -Onone -enable-testing -parse-as-library -module-name SafeNetCore \
   -emit-module -emit-module-path "$OUT/SafeNetCore.swiftmodule" \

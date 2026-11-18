@@ -31,7 +31,7 @@ Identifier=local.safenet.app
 Format=app bundle with Mach-O universal (x86_64 arm64)
 CodeDirectory v=20500 size=25106 flags=0x10002(adhoc,runtime) hashes=778+3 location=embedded
 Signature=adhoc
-543e203f959edd482d7beff2531e06fc71bcb507e0e81876b9939e36b3d828fd  SafeNet.zip
+<sha256>  SafeNet.zip          # тот же хеш записан в dist/SafeNet.zip.sha256
 ```
 
 Подпись: `codesign --force --deep --sign - --options runtime --timestamp=none`. Hardened runtime
@@ -41,7 +41,8 @@ JIT, плагинов и DYLD-переменных). Приложение из �
 `iconutil -c icns`.
 
 SHA-256 зависит от времени сборки: при каждой пересборке `build-app.sh` печатает новый хеш и
-пишет его в `dist/SafeNet.zip.sha256`. Указанный выше хеш относится к сборке, проверенной здесь.
+пишет его в `dist/SafeNet.zip.sha256`. Хеш здесь не записан, чтобы не устаревал: сверяйте с
+этим файлом из той же сборки, что и отправленный архив.
 
 ### 1.3 Сквозная проверка бандла: `scripts/verify-app.sh` → `ALL CHECKS PASSED` (62 проверки)
 
@@ -86,6 +87,13 @@ ok   no leftover processes
 ```
 (Причина заморозки — «маршрут до ИИ-сервисов…»: в тестовом режиме проверка маршрута тоже отвечает
 1.2.3.4/RU, она проверяется раньше страны. Это ожидаемо.)
+
+Защита временной папки: `scripts/verify-app.sh --selftest-guard` → `guard selftest: PASSED`
+(отказ для пустого пути, репозитория, $HOME, /, относительного и несуществующего пути, папки без
+префикса snverify., snverify.* внутри репозитория, симлинка snverify.* на репозиторий, родителя
+репозитория; согласие только для свежей snverify.* во временной папке). При сбое `mktemp`
+(`TMPDIR=/nonexistent`) скрипт выходит с кодом 2, ничего не удаляя. Все вызовы `safenet` идут с
+таймаутом 10 с.
 
 ### 1.4 Срок заморозки и оффлайн (вручную, бандл, `grace: 10`, `close_timeout: 2`, `check_interval: 1`)
 
@@ -186,6 +194,15 @@ SAFENET_CONFIG_DIR=/tmp/sn-demo SAFENET_FAKE_IP=1.2.3.4,RU \
 ```
 (завершить: Ctrl-C в этом терминале или «Выйти из SafeNet» в меню).
 
+**То же у друга (приложение уже в «Программах»):**
+```sh
+mkdir -p /tmp/sn-demo
+SAFENET_CONFIG_DIR=/tmp/sn-demo SAFENET_FAKE_IP=1.2.3.4,RU \
+  /Applications/SafeNet.app/Contents/MacOS/SafeNetApp
+```
+Перед этим выйдите из обычного SafeNet, если он запущен. Команды CLI для этого тестового
+экземпляра вызывайте с той же папкой: `SAFENET_CONFIG_DIR=/tmp/sn-demo safenet status`.
+
 **У друга (macOS 26, скорее всего Apple Silicon):** получить `SafeNet.zip`, сверить хеш
 (`shasum -a 256 SafeNet.zip` должен совпасть с присланным), распаковать двойным щелчком,
 перетащить SafeNet.app в «Программы».
@@ -271,7 +288,9 @@ SAFENET_CONFIG_DIR=/tmp/sn-demo SAFENET_FAKE_IP=1.2.3.4,RU \
    проверки (5 с по умолчанию).
 
 ### 2.11 Команда safenet
-1. `sudo ln -s /Applications/SafeNet.app/Contents/Resources/safenet /usr/local/bin/safenet`
+1. Без администратора: `alias safenet=/Applications/SafeNet.app/Contents/Resources/safenet` в
+   `~/.zshrc` (или симлинк в `~/bin`); с администратором:
+   `sudo ln -s /Applications/SafeNet.app/Contents/Resources/safenet /usr/local/bin/safenet`
 2. `safenet status`, `safenet allow`, `safenet allow NL`, `safenet panel`, `safenet config`,
    `safenet version` → русские ответы, коды выхода 0; при выключенном SafeNet `status` → «SafeNet не
    запущен…», код 3.

@@ -8,7 +8,7 @@
 #   dist/SafeNet.zip            SafeNet/{SafeNet.app, ПРОЧТИ-МЕНЯ.txt}, made with ditto (keeps signature)
 # Nothing is installed anywhere: no /Applications, no /usr/local, no login item.
 set -euo pipefail
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/.." || exit 2
 ROOT="$PWD"
 DIST="$ROOT/dist"
 APP="$DIST/SafeNet.app"
@@ -24,7 +24,8 @@ swiftc -O -o .build/icon/make-icon scripts/make-icon.swift
 iconutil -c icns -o .build/icon/AppIcon.icns .build/icon/AppIcon.iconset
 
 echo "==> bundle"
-rm -rf "$DIST"
+[ -n "$DIST" ] && [ "$DIST" = "$ROOT/dist" ] && [ "$ROOT" != / ] || exit 2
+rm -rf -- "$DIST"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp .build/SafeNetApp "$APP/Contents/MacOS/SafeNetApp"
 cp Resources/Info.plist "$APP/Contents/Info.plist"
@@ -50,8 +51,11 @@ chmod 755 "$DIST/safenet"
 cp "Resources/$README_NAME" "$DIST/$README_NAME"
 
 echo "==> zip"
-STAGE="$(mktemp -d)"
-trap 'rm -rf "$STAGE"' EXIT
+STAGE="$(mktemp -d "${TMPDIR:-/tmp}/snstage.XXXXXX")" || { echo "mktemp failed" >&2; exit 2; }
+# Never let an empty or odd STAGE turn the cleanup into a delete of something else.
+case "$(basename -- "${STAGE:-/}")" in snstage.?*) ;; *) echo "bad stage dir '$STAGE'" >&2; exit 2;; esac
+[ -d "$STAGE" ] || exit 2
+trap 'case "$(basename -- "${STAGE:-/}")" in snstage.?*) [ -d "$STAGE" ] && rm -rf -- "$STAGE";; esac' EXIT
 mkdir "$STAGE/SafeNet"
 ditto "$APP" "$STAGE/SafeNet/SafeNet.app"
 cp "Resources/$README_NAME" "$STAGE/SafeNet/$README_NAME"

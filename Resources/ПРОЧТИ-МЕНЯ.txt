@@ -69,13 +69,19 @@ SafeNet.app (лучше из папки «Программы»; если пот�
 
 Команда safenet в Терминале (по желанию)
 ----------------------------------------
-Внутри приложения есть консольная команда. Чтобы вызывать её как `safenet`:
+Внутри приложения есть консольная команда. Чтобы вызывать её как `safenet`,
+выберите один способ.
 
+Без прав администратора (рекомендуется) — добавьте в ~/.zshrc строку
+  alias safenet=/Applications/SafeNet.app/Contents/Resources/safenet
+и откройте новое окно Терминала. Или ссылка в свою папку ~/bin:
+  mkdir -p ~/bin
+  ln -s /Applications/SafeNet.app/Contents/Resources/safenet ~/bin/safenet
+  echo 'export PATH="$HOME/bin:$PATH"' >> ~/.zshrc
+
+С правами администратора (для всех пользователей):
   sudo mkdir -p /usr/local/bin
   sudo ln -s /Applications/SafeNet.app/Contents/Resources/safenet /usr/local/bin/safenet
-
-(или без sudo: добавьте в ~/.zshrc строку
-  alias safenet=/Applications/SafeNet.app/Contents/Resources/safenet )
 
 Команды (SafeNet должен быть запущен):
   safenet status            состояние защиты, IP, страна, что заморожено
@@ -110,9 +116,15 @@ SafeNet.app (лучше из папки «Программы»; если пот�
 Удаление:
 1. Выключите автозапуск (Панель → «Настройки»), затем выйдите из SafeNet.
 2. Удалите SafeNet.app из «Программ».
-3. Удалите папку ~/Library/Application Support/SafeNet
-4. Если делали команду safenet: sudo rm /usr/local/bin/safenet
-5. По желанию: «Системные настройки» → «Уведомления» → SafeNet можно убрать
+3. Удалите папку ~/Library/Application Support/SafeNet — вместе с ней уйдут
+   все служебные файлы: config.yaml, config.last-good.yaml, копии
+   config.broken-*.yaml (если были), events.jsonl и events.jsonl.stats.json,
+   frozen.json, safenet.sock.
+4. Удалите файл ~/Library/Preferences/local.safenet.app.plist (там только
+   положение окна панели) или в Терминале: defaults delete local.safenet.app
+5. Если делали команду safenet: удалите ссылку (sudo rm /usr/local/bin/safenet
+   или rm ~/bin/safenet) либо строку alias из ~/.zshrc.
+6. По желанию: «Системные настройки» → «Уведомления» → SafeNet можно убрать
    после удаления приложения (macOS делает это и сама со временем).
 
 

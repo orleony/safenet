@@ -24,16 +24,35 @@ public struct IPAnswer: Equatable {
     public init(ip: String, country: String) { self.ip = ip; self.country = country }
 }
 
+/// Raw data for the route / IPv6 leak decisions, judged PER APP against that app's effective
+/// allow list (per-app rules replace the common list, also for leaks).
+public struct LeakInputs: Equatable {
+    /// IPv6 answers of the IP services.
+    public var ipv6Answers: [IPAnswer]
+    /// Route probe results; nil = not evaluated (see `detectRouteLeak`).
+    public var routes: [RouteResult]?
+    public var checkIPv6: Bool
+    public var checkRoutes: Bool
+    public init(ipv6Answers: [IPAnswer], routes: [RouteResult]?, checkIPv6: Bool, checkRoutes: Bool) {
+        self.ipv6Answers = ipv6Answers; self.routes = routes; self.checkIPv6 = checkIPv6; self.checkRoutes = checkRoutes
+    }
+}
+
 public struct Observation: Equatable {
     public var online: Bool
     public var ips: [IPAnswer]
+    /// Display / journal flags (some app sees a leak). When `leakInputs` is set, `evaluate`
+    /// ignores these two and decides from the raw data with the app's own allow list.
     public var ipv6Leak: Bool
     public var dnsLeak: Bool
     public var routeLeak: Bool
     public var trustedNetwork: Bool
-    public init(online: Bool, ips: [IPAnswer], ipv6Leak: Bool, dnsLeak: Bool, routeLeak: Bool, trustedNetwork: Bool) {
+    public var leakInputs: LeakInputs?
+    public init(online: Bool, ips: [IPAnswer], ipv6Leak: Bool, dnsLeak: Bool, routeLeak: Bool, trustedNetwork: Bool,
+                leakInputs: LeakInputs? = nil) {
         self.online = online; self.ips = ips; self.ipv6Leak = ipv6Leak
         self.dnsLeak = dnsLeak; self.routeLeak = routeLeak; self.trustedNetwork = trustedNetwork
+        self.leakInputs = leakInputs
     }
 }
 
@@ -55,8 +74,10 @@ public func evaluate(_ o: Observation, allow: AllowList, minAgree: Int, dnsCheck
     guard o.online else { return .offline }
     if o.trustedNetwork { return .ok }
     if allow.ips.isEmpty && allow.countries.isEmpty { return .freeze(.noAllowList) }
-    if o.ipv6Leak { return .freeze(.ipv6Leak) }
-    if o.routeLeak { return .freeze(.routeLeak) }
+    let v6 = o.leakInputs.map { $0.checkIPv6 && detectIPv6Leak(answers: $0.ipv6Answers, allow: allow) } ?? o.ipv6Leak
+    if v6 { return .freeze(.ipv6Leak) }
+    let route = o.leakInputs.map { $0.checkRoutes && detectRouteLeak($0.routes, allow: allow) } ?? o.routeLeak
+    if route { return .freeze(.routeLeak) }
     if o.dnsLeak && dnsCheck == .block { return .freeze(.dnsLeak) }
 
     let quorum = max(1, minAgree)

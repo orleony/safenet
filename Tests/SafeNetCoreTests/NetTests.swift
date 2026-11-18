@@ -293,7 +293,8 @@ func registerNetTests() {
 
         let clean = NetworkSampler.makeObservation(snapshot: snap(tunnel: true, mac: "de:ad:be:ef:00:01", v6: true), answers: [v4],
                                                    routes: nil, resolvers: [DNSResolver(address: "10.8.0.1", interface: "utun4", scoped: false)], allow: cfg.allow, config: cfg)
-        expectEqual(clean, Observation(online: true, ips: [v4], ipv6Leak: false, dnsLeak: false, routeLeak: false, trustedNetwork: false))
+        expectEqual(clean, Observation(online: true, ips: [v4], ipv6Leak: false, dnsLeak: false, routeLeak: false, trustedNetwork: false,
+                                       leakInputs: LeakInputs(ipv6Answers: [], routes: nil, checkIPv6: true, checkRoutes: true)))
 
         let leaky = NetworkSampler.makeObservation(snapshot: snap(tunnel: true, mac: "de:ad:be:ef:00:01", v6: true), answers: [v4, v6],
                                                    routes: [routeBad], resolvers: [router], allow: cfg.allow, config: cfg)

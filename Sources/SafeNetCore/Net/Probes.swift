@@ -244,7 +244,8 @@ public enum NetworkSampler {
         public var dnsUnknown: Bool
     }
 
-    /// Pure mapping of everything measured in one cycle. `allow` is the effective allow list.
+    /// Pure mapping of everything measured in one cycle. `allow` only feeds the display flags
+    /// `ipv6Leak` / `routeLeak`; `evaluate` judges those leaks per app from `leakInputs`.
     /// `routes == nil` means the route check was not evaluated; `resolvers == nil` (or empty) means unknown DNS.
     public static func makeSample(snapshot: NetSnapshot, answers: [IPAnswer], routes: [RouteResult]?,
                                   resolvers: [DNSResolver]?, allow: AllowList, config: Config) -> Sample {
@@ -259,7 +260,9 @@ public enum NetworkSampler {
             ipv6Leak: config.checkIPv6 && detectIPv6Leak(answers: answers, allow: allow),
             dnsLeak: dnsLeak,
             routeLeak: config.routeCheck && detectRouteLeak(routes, allow: allow),
-            trustedNetwork: isTrusted(snapshot, config.trustedNetworks))
+            trustedNetwork: isTrusted(snapshot, config.trustedNetworks),
+            leakInputs: LeakInputs(ipv6Answers: answers.filter { $0.ip.contains(":") }, routes: routes,
+                                   checkIPv6: config.checkIPv6, checkRoutes: config.routeCheck))
         return Sample(observation: obs, dnsUnknown: dnsUnknown)
     }
 

@@ -117,4 +117,49 @@ func registerVerdictTests() {
         expectEqual(IPMatcher.prefixLength("10.0.0.0/8"), 8)
         expectEqual(IPMatcher.prefixLength("10.0.0.1"), nil)
     }
+
+    // MARK: I3: route / IPv6 leaks judged per app
+
+    test("testRouteLeakIsJudgedPerApp") {
+        var c = Config.default
+        c.apps = ["claude", "telegram"]
+        c.appRules = ["claude": AllowList(countries: ["NL"]), "telegram": AllowList(countries: ["RU"])]
+        let snap = NetSnapshot(online: true, hasTunnel: true, gatewayIP: nil, gatewayMAC: nil, proxy: nil)
+        let routes = [RouteResult(host: "api.anthropic.com", ip: "5.5.5.5", country: "RU", error: nil)]
+        var o = NetworkSampler.makeObservation(snapshot: snap, answers: [], routes: routes, resolvers: nil,
+                                               allow: AllowList(), config: c)
+        o.ips = [IPAnswer(ip: "185.1.1.1", country: "RU"), IPAnswer(ip: "185.1.1.1", country: "RU")]
+        let claude = AllowList(ips: ["185.1.1.1"], countries: ["NL"])
+        expectEqual(evaluate(o, allow: claude, minAgree: 2, dnsCheck: .warn), .freeze(.routeLeak), "route via RU: leak for Claude")
+        expectEqual(evaluate(o, allow: effectiveAllow(for: "telegram", in: c), minAgree: 2, dnsCheck: .warn), .ok,
+                    "the same route is fine for Telegram (RU allowed)")
+    }
+    test("testIPv6LeakIsJudgedPerApp") {
+        var c = Config.default
+        c.apps = ["claude", "telegram"]
+        let snap = NetSnapshot(online: true, hasTunnel: true, gatewayIP: nil, gatewayMAC: nil, proxy: nil)
+        let answers = [IPAnswer(ip: "185.1.1.1", country: "RU"), IPAnswer(ip: "185.1.1.1", country: "RU"),
+                       IPAnswer(ip: "2a00::1", country: "RU")]
+        var o = NetworkSampler.makeObservation(snapshot: snap, answers: answers, routes: nil, resolvers: nil,
+                                               allow: AllowList(), config: c)
+        o.ips = Array(answers.prefix(2))               // the engine keeps only IPv4 for the quorum
+        expectEqual(evaluate(o, allow: AllowList(ips: ["185.1.1.1"], countries: ["NL"]), minAgree: 2, dnsCheck: .warn),
+                    .freeze(.ipv6Leak))
+        expectEqual(evaluate(o, allow: AllowList(countries: ["RU"]), minAgree: 2, dnsCheck: .warn), .ok)
+    }
+    test("testPerAppLeakInputsKeepFailClosedSemantics") {
+        var c = Config.default; c.apps = ["claude"]
+        let snap = NetSnapshot(online: true, hasTunnel: true, gatewayIP: nil, gatewayMAC: nil, proxy: nil)
+        let good = [IPAnswer(ip: "1.2.3.4", country: "NL"), IPAnswer(ip: "1.2.3.4", country: "NL")]
+        func o(_ routes: [RouteResult]?) -> Observation {
+            NetworkSampler.makeObservation(snapshot: snap, answers: good, routes: routes, resolvers: nil, allow: nl, config: c)
+        }
+        expectEqual(evaluate(o(nil), allow: nl, minAgree: 2, dnsCheck: .warn), .ok, "nil = not evaluated")
+        expectEqual(evaluate(o([]), allow: nl, minAgree: 2, dnsCheck: .warn), .freeze(.routeLeak), "zero results = leak")
+        let failed = [RouteResult(host: "claude.ai", ip: nil, country: nil, error: "x")]
+        expectEqual(evaluate(o(failed), allow: nl, minAgree: 2, dnsCheck: .warn), .freeze(.routeLeak))
+        c.routeCheck = false
+        let off = NetworkSampler.makeObservation(snapshot: snap, answers: good, routes: [], resolvers: nil, allow: nl, config: c)
+        expectEqual(evaluate(off, allow: nl, minAgree: 2, dnsCheck: .warn), .ok, "route check off")
+    }
 }

@@ -302,7 +302,14 @@ public final class Engine {
         let wantDNS = config.dnsCheck != .off && snap.hasTunnel
         var s = NetworkSampler.makeSample(snapshot: snap, answers: lastAnswers, routes: routesActive ? routes : nil,
                                           resolvers: wantDNS ? deps.resolvers() : nil,
-                                          allow: Engine.leakAllow(config), config: config)
+                                          allow: config.allow, config: config)
+        // Display / journal flags: a leak for at least one protected app (each app is judged
+        // with its own allow list by `evaluate` through `leakInputs`).
+        if let li = s.observation.leakInputs {
+            let lists = Engine.protectedAllowLists(config)
+            s.observation.ipv6Leak = li.checkIPv6 && lists.contains { detectIPv6Leak(answers: li.ipv6Answers, allow: $0) }
+            s.observation.routeLeak = li.checkRoutes && lists.contains { detectRouteLeak(li.routes, allow: $0) }
+        }
         s.observation.ips = Engine.quorumAnswers(lastAnswers)
         lastSample = s
         lastCheck = deps.clock.now
@@ -519,19 +526,21 @@ public final class Engine {
         return ok.count == 1 ? ok[0].0 : nil
     }
 
-    /// Allow list for the global leak signals (IPv6 / route), which the Guard cannot evaluate per
-    /// app: the union of the protected apps' effective allow lists. Known limit: with differing
-    /// per-app rules a route/IPv6 exit allowed only for another app is not reported as a leak.
+    /// Display only (deep check rows): the union of the protected apps' effective allow lists.
+    /// The protection itself judges every app with its own list (`LeakInputs`).
     static func leakAllow(_ c: Config) -> AllowList {
-        let ids = AppCatalog.appIDs(in: c)
-        guard !ids.isEmpty else { return c.allow }
         var out = AllowList()
-        for id in ids {
-            let a = effectiveAllow(for: id, in: c)
+        for a in protectedAllowLists(c) {
             for ip in a.ips where !out.ips.contains(ip) { out.ips.append(ip) }
             for cc in a.countries where !out.countries.contains(cc) { out.countries.append(cc) }
         }
         return out
+    }
+
+    /// Effective allow lists of the protected apps (the common list when none is protected).
+    static func protectedAllowLists(_ c: Config) -> [AllowList] {
+        let ids = AppCatalog.appIDs(in: c)
+        return ids.isEmpty ? [c.allow] : ids.map { effectiveAllow(for: $0, in: c) }
     }
 
     /// First-run prompt: some protected app has an empty effective allow list, so it can never

@@ -560,4 +560,22 @@ func registerEngineTests() {
         expect(r.engine.allowCurrentCountry())
         expectEqual(r.engine.status.state, .ok)
     }
+
+    test("testEngineRouteLeakPerAppNotUnion") {
+        var c = cfg(apps: ["telegram", "chatgpt"], countries: ["RU"])
+        c.appRules = ["chatgpt": AllowList(countries: ["NL"])]
+        let r = ERig(config: c)
+        r.table.procs.append(eproc(300, "ChatGPT"))
+        r.answers = [a("5.6.7.8", "RU"), a("5.6.7.8", "RU")]
+        r.routeResults = [RouteResult(host: "chatgpt.com", ip: "7.7.7.7", country: "RU", error: nil)]
+        c.appRules["chatgpt"] = AllowList(ips: ["5.6.7.8"], countries: ["NL"])
+        try? r.store.save(c)
+        r.rebuild()
+        r.engine.start(watchConfig: false)
+        r.engine.networkChanged(online)
+        r.clock.advance(by: 0.1)                     // route probe finished
+        expectEqual(r.engine.guardian.frozenApps, ["chatgpt"], "route via RU: leak for ChatGPT (NL only), fine for Telegram")
+        if case .frozen(_, let reason, _) = r.engine.status.state { expectEqual(reason, .routeLeak) }
+        expectEqual(r.engine.status.observation?.routeLeak, true, "display flag: some app sees a leak")
+    }
 }

@@ -6,7 +6,7 @@ import Darwin
 public struct ProcInfo: Equatable {
     public var pid: Int32
     public var ppid: Int32
-    /// Kernel process name (may be truncated to 32 characters).
+    /// Kernel process name (p_comm: truncated to 16 characters, MAXCOMLEN).
     public var name: String
     /// Full executable path, "" when unknown.
     public var path: String

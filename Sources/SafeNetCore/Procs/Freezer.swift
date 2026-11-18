@@ -254,10 +254,13 @@ public final class Freezer {
 
     // MARK: Watchdog
 
-    /// Watchdog mode (`SafeNet --watchdog <parentPID>`, started by the app in Task 9).
+    /// Watchdog mode (`SafeNetApp --watchdog <parentPID> <journal>`, started by the app).
     /// Blocks while `parent` lives (kqueue NOTE_EXIT plus a 0.5 s liveness poll that also
-    /// notices re-parenting, which catches pid reuse), then resumes every journaled process
-    /// whose start time still matches, clears the journal and returns; the caller then exits.
+    /// notices re-parenting, which catches pid reuse), then takes the instance lock
+    /// (`InstanceLock`, next to the journal): when a relaunched app already holds it, it returns
+    /// at once and leaves everything to that app's reconcile. Otherwise it resumes every
+    /// journaled process whose start time still matches, retrying for ~10 s; entries it could
+    /// not resolve stay in the journal for the next app start. The caller then exits.
     public static func runWatchdog(parent: Int32, journal: URL) {
         let wasChild = getppid() == parent
         let alive: () -> Bool = {
@@ -281,8 +284,11 @@ public final class Freezer {
                 usleep(500_000)
             }
         }
+        let lock = InstanceLock(url: InstanceLock.path(forJournal: journal))
         watchdog(journal: journal, table: SystemProcessTable(), signaler: KillSignaler(),
-                 selfPID: getpid(), myUID: getuid(), isParentAlive: alive, wait: wait)
+                 selfPID: getpid(), myUID: getuid(), isParentAlive: alive, wait: wait,
+                 acquireLock: { lock.acquire(timeout: 1) })   // the dead parent's lock is freed at exit
+        lock.release()
         if kq >= 0 { Darwin.close(kq) }
     }
 
@@ -290,8 +296,10 @@ public final class Freezer {
     /// After the parent died, retries unresolved entries up to `retries` times (one `wait()`
     /// apart, ~0.5 s each in production), keeping them journaled for the next app start.
     static func watchdog(journal url: URL, table: ProcessTable, signaler: Signaler, selfPID: Int32, myUID: uid_t,
-                         isParentAlive: () -> Bool, wait: () -> Void, retries: Int = 20) {
+                         isParentAlive: () -> Bool, wait: () -> Void, retries: Int = 20,
+                         acquireLock: () -> Bool = { true }) {
         while isParentAlive() { wait() }
+        guard acquireLock() else { return }          // a new instance owns the journal now
         let j = FreezeJournal(url: url)
         var entries = j.load()
         var attempt = 0

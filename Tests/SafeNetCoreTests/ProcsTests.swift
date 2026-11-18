@@ -590,4 +590,54 @@ func registerProcsTests() {
         expectEqual(child.terminationStatus, SIGTERM, "exited from SIGTERM, not SIGKILL")
         expect(journalPIDs(j).isEmpty)
     }
+
+    // MARK: I4: single instance + journal lock
+
+    test("testInstanceLockAcquireBusyRelease") {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("safenet-lock-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent("safenet.lock")
+        let a = InstanceLock(url: url), b = InstanceLock(url: url)
+        expect(a.tryAcquire(), "first acquires")
+        expect(a.isHeld)
+        expect(!b.tryAcquire(), "second is busy")
+        var slept = 0.0
+        expect(!b.acquire(timeout: 1, poll: 0.25, sleep: { slept += $0 }), "waits, then gives up")
+        expect(slept >= 1 && slept < 1.6, "waited about the timeout: \(slept)")
+        a.release()
+        expect(!a.isHeld)
+        expect(b.tryAcquire(), "free after release")
+        let fd = open(url.path, O_RDONLY)
+        defer { close(fd) }
+        expect(fd >= 0)
+        expectEqual(InstanceLock.path(forJournal: dir.appendingPathComponent("frozen.json")), url)
+    }
+    test("testInstanceLockFileIsCloseOnExec") {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("safenet-lock-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let l = InstanceLock(url: dir.appendingPathComponent("safenet.lock"))
+        expect(l.tryAcquire())
+        expect(l.descriptorIsCloseOnExec, "a spawned watchdog must not inherit the lock")
+    }
+    test("testWatchdogYieldsToNewInstance") {
+        let a = proc(1800, "Telegram")
+        let t = FakeTable([a]), j = tempJournal()
+        makeFreezer(t, FakeSignaler(), j).freeze([a])
+        let s = FakeSignaler()
+        Freezer.watchdog(journal: j, table: t, signaler: s, selfPID: fakeSelf, myUID: me,
+                         isParentAlive: { false }, wait: {}, acquireLock: { false })
+        expect(s.sent.isEmpty, "a new instance holds the lock: the watchdog touches nothing")
+        expectEqual(journalPIDs(j), [1800], "journal left for the new instance's reconcile")
+    }
+    test("testWatchdogTakesLockBeforeResuming") {
+        let a = proc(1810, "Telegram")
+        let t = FakeTable([a]), j = tempJournal()
+        makeFreezer(t, FakeSignaler(), j).freeze([a])
+        let s = FakeSignaler()
+        var locked = false
+        Freezer.watchdog(journal: j, table: t, signaler: s, selfPID: fakeSelf, myUID: me,
+                         isParentAlive: { false }, wait: {}, acquireLock: { locked = true; return true })
+        expect(locked)
+        expectEqual(s.pids(SIGCONT), [1810])
+    }
 }

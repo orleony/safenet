@@ -27,10 +27,16 @@ public final class LiveSystem {
     private var observers: [NSObjectProtocol] = []
     private var stopped = false
     private var ipc: IPCServer?
+    /// Held for the whole life of the app (released by the kernel at exit).
+    private let instanceLock: InstanceLock
 
     public init(environment env: [String: String] = ProcessInfo.processInfo.environment) {
         paths = AppPaths.from(environment: env)
         paths.createDirectory()
+        // Single instance, before the Freezer touches the journal. Busy = another SafeNet runs, or
+        // the watchdog of a just-quit one is still resuming its apps (up to ~10 s): wait for it.
+        instanceLock = InstanceLock(url: InstanceLock.path(forJournal: paths.journal))
+        if !instanceLock.acquire(timeout: 12) { LiveSystem.refuseSecondInstance() }
         testMode = TestMode.from(environment: env)
         configReadOnly = testMode != nil && (env["SAFENET_CONFIG_DIR"] ?? "").isEmpty
         let q = queue
@@ -119,6 +125,21 @@ public final class LiveSystem {
         monitor = NetworkMonitor(snapshotSource: offlineSource) { [weak self] snap in
             self?.queue.async { self?.engine.networkChanged(snap) }
         }
+    }
+
+    /// Another instance owns the journal: say so and exit WITHOUT touching it.
+    private static func refuseSecondInstance() -> Never {
+        NSLog("SafeNet: another instance is running (safenet.lock busy); exiting")
+        FileHandle.standardError.write(Data("SafeNet уже запущен.\n".utf8))
+        let app = NSApplication.shared
+        app.setActivationPolicy(.accessory)
+        app.activate(ignoringOtherApps: true)
+        let a = NSAlert()
+        a.messageText = "SafeNet уже запущен"
+        a.informativeText = "Значок SafeNet уже есть в строке меню. Второй экземпляр закрывается."
+        a.addButton(withTitle: "OK")
+        a.runModal()
+        exit(0)
     }
 
     /// Main thread. Starts the watchdog first (it must exist before anything is frozen).

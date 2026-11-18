@@ -103,7 +103,9 @@ SafeNet.app (лучше из папки «Программы»; если пот�
                          и продолжит работать на прежних настройках)
   config.last-good.yaml  последняя рабочая копия настроек
   events.jsonl           журнал событий (заморозки, закрытия)
+  events.jsonl.stats.json  счётчики для вкладки «Журнал» (служебный)
   frozen.json            список замороженных сейчас процессов (служебный)
+  safenet.lock           защита от второго экземпляра SafeNet (служебный)
   safenet.sock           канал для команды safenet (служебный)
 
 (Папка Library скрыта: в Finder «Переход» → «Переход к папке…» и вставьте путь.)
@@ -121,7 +123,7 @@ SafeNet.app (лучше из папки «Программы»; если пот�
 3. Удалите папку ~/Library/Application Support/SafeNet — вместе с ней уйдут
    все служебные файлы: config.yaml, config.last-good.yaml, копии
    config.broken-*.yaml (если были), events.jsonl и events.jsonl.stats.json,
-   frozen.json, safenet.sock.
+   frozen.json, safenet.lock, safenet.sock.
 4. Удалите файл ~/Library/Preferences/local.safenet.app.plist (там только
    положение окна панели) или в Терминале: defaults delete local.safenet.app
 5. Если делали команду safenet: удалите ссылку (sudo rm /usr/local/bin/safenet

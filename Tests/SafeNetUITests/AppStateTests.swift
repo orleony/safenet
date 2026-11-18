@@ -7,6 +7,16 @@ private func previewState(_ c: Config = .default, status: EngineStatus = EngineS
 }
 
 func registerAppStateTests() {
+    test("testFormatClockUsesConfiguredTimeZone") {
+        let d = Date(timeIntervalSince1970: 1_700_000_000)   // 2023-11-14 22:13:20 UTC
+        Format.setTimeZone("Asia/Tokyo")
+        expectEqual(Format.clock(d), "07:13")
+        Format.setTimeZone("UTC")
+        expectEqual(Format.clock(d), "22:13")
+        Format.setTimeZone("no/such-zone")                  // unknown id falls back to the system zone
+        expect(Format.displayTimeZone == TimeZone.current, "fallback to system")
+        Format.setTimeZone("system")
+    }
     test("testAutostartMessageSurvivesConfigUpdate") {
         let m = previewState()
         m.setAutostart(true)                       // test binary has no bundle id: refused with a message

@@ -3,6 +3,16 @@ import SafeNetCore
 
 /// Pure text helpers for the menu bar and the window (Russian UI strings).
 public enum Format {
+    /// Zone for displayed times (config `timezone`); set by AppState whenever the config changes.
+    static var displayTimeZone: TimeZone = .current
+    static func setTimeZone(_ id: String) { displayTimeZone = id == "system" ? .current : (TimeZone(identifier: id) ?? .current) }
+    static func clock(_ d: Date) -> String { string(d, "HH:mm") }
+    static func dateTime(_ d: Date) -> String { string(d, "d MMM yyyy, HH:mm:ss") }
+    private static func string(_ d: Date, _ pattern: String) -> String {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "ru_RU"); f.timeZone = displayTimeZone; f.dateFormat = pattern
+        return f.string(from: d)
+    }
     /// "NL" -> 🇳🇱 (regional indicator symbols); "" for anything that is not two ASCII letters.
     public static func flag(_ cc: String) -> String {
         let u = cc.uppercased()

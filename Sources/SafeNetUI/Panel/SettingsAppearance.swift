@@ -70,6 +70,13 @@ struct AppearanceSettings: View {
                     model.update { $0.menubar = v }
                 }
             }
+            SettingRow("Часовой пояс", detail: "Для времени в журнале и «Пауза до». На защиту не влияет.") {
+                Picker("Часовой пояс", selection: Binding(get: { c.timezone }, set: { v in model.update { $0.timezone = v } })) {
+                    Text("Системный (\(TimeZone.current.identifier))").tag("system")
+                    ForEach(TimeZone.knownTimeZoneIdentifiers.sorted(), id: \.self) { Text($0).tag($0) }
+                }
+                .labelsHidden().frame(maxWidth: 260)
+            }
         }
     }
 

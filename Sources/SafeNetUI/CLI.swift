@@ -42,9 +42,7 @@ public enum CLIStatusText {
             return t + ")"
         case .closed: return "Закрыто"
         case .paused(let until):
-            let f = DateFormatter()
-            f.locale = Locale(identifier: "en_US_POSIX"); f.dateFormat = "HH:mm"
-            return "Пауза до \(f.string(from: until))"
+            return "Пауза до \(Format.clock(until))"
         }
     }
 

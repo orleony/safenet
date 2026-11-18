@@ -53,6 +53,7 @@ public final class AppState: ObservableObject {
         self.testMode = system.testMode
         self.appearance = appearance
         config = system.engine.config
+        Format.setTimeZone(system.engine.config.timezone)
         theme = Theme(config: system.engine.config, appearance: appearance)
         rebuildShownApps()
         system.onStatus = { [weak self] s in self?.receive(s) }
@@ -196,6 +197,7 @@ public final class AppState: ObservableObject {
     /// message: a failed save is followed by this very call.
     func receiveConfig(_ c: Config) {
         config = c
+        Format.setTimeZone(c.timezone)
         theme.update(config: c)
         rebuildShownApps()
     }

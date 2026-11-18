@@ -49,7 +49,7 @@ struct JournalTab: View {
                         Text(EventText.describe(e)).font(theme.font(12)).foregroundColor(p.text.swiftUIColor)
                             .fixedSize(horizontal: false, vertical: true)
                         Spacer(minLength: theme.smallGap)
-                        Text(e.date.formatted(date: .abbreviated, time: .standard))
+                        Text(Format.dateTime(e.date))
                             .font(theme.font(10).monospacedDigit()).foregroundColor(p.muted.swiftUIColor).lineLimit(1)
                     }
                     .accessibilityElement(children: .combine)

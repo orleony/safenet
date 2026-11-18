@@ -31,6 +31,16 @@ func registerConfigTests() {
         expect(c.blockWhenOffline)
     }
 
+    test("testTimezoneKey") {
+        expectEqual(Config.default.timezone, "system")
+        var c = Config.default
+        c.timezone = "Europe/Moscow"
+        let store = ConfigStore(url: tmpURL())
+        try store.save(c)
+        try expectEqual(store.load().timezone, "Europe/Moscow")
+        expectThrows({ _ = try Config(yaml: MiniYAML.parse("timezone: Mars/Olympus\n")) }, "timezone must be")
+    }
+
     test("testPauseDefaultKey") {
         expectEqual(Config.default.pauseDefault, 900, "15 min by default")
         var c = Config.default

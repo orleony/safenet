@@ -640,4 +640,20 @@ func registerProcsTests() {
         expect(locked)
         expectEqual(s.pids(SIGCONT), [1810])
     }
+
+    test("testInstanceLockUnavailableIsNotBusy") {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("safenet-lock-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let blocker = dir.appendingPathComponent("file")
+        FileManager.default.createFile(atPath: blocker.path, contents: Data("x".utf8))
+        let l = InstanceLock(url: blocker.appendingPathComponent("safenet.lock"))   // parent is a file
+        if case .unavailable = l.acquire(timeout: 5, poll: 1, sleep: { _ in expect(false, "must not wait") }) {} else {
+            expect(false, "cannot open -> unavailable, not busy")
+        }
+        let ok = InstanceLock(url: dir.appendingPathComponent("safenet.lock"))
+        expectEqual(ok.acquire(timeout: 0), .acquired)
+        expectEqual(InstanceLock(url: dir.appendingPathComponent("safenet.lock")).acquire(timeout: 0), .busy)
+        expect(InstanceLock.appWait > InstanceLock.watchdogHold + 5, "the app outwaits a retrying watchdog")
+    }
 }

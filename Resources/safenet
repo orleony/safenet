@@ -1,0 +1,24 @@
+#!/bin/sh
+# safenet — console client of the running SafeNet app (status, allow, panel, config, version).
+# Runs the app's own binary in CLI mode. Finds SafeNet.app relative to this script (following
+# symlinks, so `ln -s …/safenet /usr/local/bin/safenet` works), then in the usual places.
+self="$0"
+while [ -L "$self" ]; do
+  link="$(readlink "$self")"
+  case "$link" in
+    /*) self="$link" ;;
+    *) self="$(dirname "$self")/$link" ;;
+  esac
+done
+here="$(cd "$(dirname "$self")" && pwd -P)"
+# Without arguments the binary would start the menu-bar app: show help instead.
+[ $# -eq 0 ] && set -- --help
+for exe in \
+  "$here/../MacOS/SafeNetApp" \
+  "$here/SafeNet.app/Contents/MacOS/SafeNetApp" \
+  "/Applications/SafeNet.app/Contents/MacOS/SafeNetApp" \
+  "$HOME/Applications/SafeNet.app/Contents/MacOS/SafeNetApp"; do
+  [ -x "$exe" ] && exec "$exe" "$@"
+done
+echo "safenet: не найден SafeNet.app (ожидался рядом с этой командой или в /Applications)" >&2
+exit 127

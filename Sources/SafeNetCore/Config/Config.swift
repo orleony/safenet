@@ -96,11 +96,21 @@ public struct Config: Equatable {
             }
         }
         if let v = yaml["allow"] { c.allow = try Config.allowList(v, "allow") }
+        // Keys are canonicalised here, in file order: when `Claude` and `claude` both appear, the
+        // FIRST one in the file wins (deterministic and visible to whoever edits the file).
+        let customNames = Set(c.customApps.map { $0.name })
+        func canon(_ k: String) -> String { customNames.contains(k) ? k : (AppCatalog.preset(k)?.id ?? k) }
         if let v = yaml["app_rules"] {
-            for e in try Config.entries(v, "app_rules") { c.appRules[e.key] = try Config.allowList(e.value, "app_rules.\(e.key)") }
+            for e in try Config.entries(v, "app_rules") {
+                let r = try Config.allowList(e.value, "app_rules.\(e.key)")
+                if c.appRules[canon(e.key)] == nil { c.appRules[canon(e.key)] = r }
+            }
         }
         if let v = yaml["app_grace"] {
-            for e in try Config.entries(v, "app_grace") { c.appGrace[e.key] = try Config.duration(e.value, "app_grace.\(e.key)") }
+            for e in try Config.entries(v, "app_grace") {
+                let g = try Config.duration(e.value, "app_grace.\(e.key)")
+                if c.appGrace[canon(e.key)] == nil { c.appGrace[canon(e.key)] = g }
+            }
         }
         if let v = yaml["grace"] { c.grace = try Config.duration(v, "grace") }
         if let v = yaml["close_timeout"] { c.closeTimeout = try Config.duration(v, "close_timeout") }
@@ -145,7 +155,8 @@ public struct Config: Equatable {
 
     /// Preset ids in their canonical (lowercase) form, duplicates dropped, also as keys of
     /// `app_rules` / `app_grace` (a hand-edited `Claude` would otherwise never toggle off).
-    /// Custom app names are kept exactly.
+    /// Custom app names are kept exactly. The YAML loader already resolves key collisions in file
+    /// order (first wins); for a Config built in code, colliding keys resolve in sorted key order.
     public mutating func normalisePresetIDs() {
         let custom = Set(customApps.map { $0.name })
         func canon(_ id: String) -> String { custom.contains(id) ? id : (AppCatalog.preset(id)?.id ?? id) }

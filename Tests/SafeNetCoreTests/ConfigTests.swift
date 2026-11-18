@@ -275,4 +275,12 @@ func registerConfigTests() {
         expectEqual(c.appRules["claude"], AllowList(countries: ["NL"]))
         expectEqual(c.appGrace["telegram"], 30)
     }
+
+    test("testPresetKeyCollisionFirstInFileWins") {
+        let a = try Config(yaml: MiniYAML.parse("app_rules:\n  claude:\n    countries: [NL]\n  Claude:\n    countries: [RU]\napp_grace:\n  Claude: 30s\n  claude: 90s\n"))
+        expectEqual(a.appRules["claude"], AllowList(countries: ["NL"]), "first entry in the file wins")
+        expectEqual(a.appGrace["claude"], 30)
+        let b = try Config(yaml: MiniYAML.parse("app_rules:\n  Claude:\n    countries: [RU]\n  claude:\n    countries: [NL]\n"))
+        expectEqual(b.appRules["claude"], AllowList(countries: ["RU"]), "order in the file decides, not sorting")
+    }
 }

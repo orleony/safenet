@@ -593,4 +593,16 @@ func registerEngineTests() {
         r.engine.toggleApp("TELEGRAM")
         expectEqual(r.engine.config.apps, [])
     }
+
+    test("testUpdateConfigRefusesInvalidChange") {
+        let r = ERig(config: cfg())
+        r.engine.start(watchConfig: false)
+        let before = r.engine.config
+        let res = r.engine.updateConfig { $0.grace = 0 }
+        if case .invalid = res {} else { expect(false, "\(res)") }
+        expectEqual(r.engine.config, before, "nothing changed")
+        expect(r.errors.last?.contains("grace") == true, "\(r.errors)")
+        expectEqual(try? r.store.load(), before, "file untouched")
+        if case .invalid = r.engine.updateConfig({ $0.minAgree = 0 }) {} else { expect(false, "min_agree 0") }
+    }
 }

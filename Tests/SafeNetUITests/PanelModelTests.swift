@@ -80,6 +80,13 @@ func registerPanelModelTests() {
         expect(DurationInput.parse("601", range: 5...600).error != nil)
         expectEqual(DurationInput.text(20), "20")
         expectEqual(DurationInput.text(1.5), "1.5")
+        // Minutes field (pause default): bare number = minutes, suffixes convert, message says минут.
+        expectEqual(DurationInput.parse("15", range: 1...1440, unit: .minutes).value, 15)
+        expectEqual(DurationInput.parse("2m", range: 1...1440, unit: .minutes).value, 2, "2m is 2 minutes, not 120")
+        expectEqual(DurationInput.parse("1h", range: 1...1440, unit: .minutes).value, 60)
+        expectEqual(DurationInput.parse("90s", range: 1...1440, unit: .minutes).value, 1.5)
+        expect(DurationInput.parse("0", range: 1...1440, unit: .minutes).error?.contains("минут") == true)
+        expectEqual(DurationInput.graceRange, 5...600, "one range for common and per-app freeze time")
     }
 
     test("testAccentHexInput") {

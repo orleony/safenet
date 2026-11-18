@@ -30,8 +30,8 @@ struct AppRulesEditor: View {
             if let g = c.appGrace[id] {
                 ValidatedField(label: "Своё время заморозки, секунд", placeholder: "секунд", actionTitle: "Сохранить",
                                initial: DurationInput.text(g), width: 120,
-                               validate: { r in let x = DurationInput.parse(r, range: 5...3600); return InputCheck(value: x.value.map { DurationInput.text($0) }, error: x.error, warning: nil) },
-                               commit: { v in if let d = DurationInput.parse(v, range: 5...3600).value { model.update { $0.appGrace[id] = d } } })
+                               validate: { r in let x = DurationInput.parse(r, range: DurationInput.graceRange); return InputCheck(value: x.value.map { DurationInput.text($0) }, error: x.error, warning: nil) },
+                               commit: { v in if let d = DurationInput.parse(v, range: DurationInput.graceRange).value { model.update { $0.appGrace[id] = d } } })
             }
         }
         .padding(theme.spacing - 2)

@@ -128,8 +128,13 @@ public final class CLIService {
             result = e.updateConfig { if !$0.allow.countries.contains(cc) { $0.allow.countries.append(cc) } }
             what = "Разрешена страна \(cc)"
         }
-        let extra = warning.map { "\nВнимание: \($0)" } ?? ""
+        var extra = warning.map { "\nВнимание: \($0)" } ?? ""
+        let own = AppCatalog.appIDs(in: e.config).filter { e.config.appRules[$0] != nil }
+        if !own.isEmpty {
+            extra += "\nОбщий список изменён. У приложений со своими правилами (\(own.map { AppCatalog.displayName(for: $0) }.joined(separator: ", "))) он не действует — их правила меняются в панели, вкладка «Приложения»."
+        }
         switch result {
+        case .invalid(let m): return .error(m)
         case .saved: return IPCResponse(ok: true, text: what + extra)
         case .unchanged: return .error("SafeNet завершает работу: ничего не изменено")
         case .refused(let m): return .error("\(m). Изменение не записано, действует до выхода из приложения.")

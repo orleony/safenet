@@ -130,6 +130,17 @@ func registerIPCServerTests() {
         expect(wide?.text.contains("Внимание") == true, wide?.text ?? "")
     }
 
+    test("testIPCAllowSaysPerAppRulesAreNotAffected") {
+        var c = Config.default
+        c.apps = ["telegram"]; c.allow = AllowList(countries: ["NL"]); c.closeTimeout = 0
+        c.appRules = ["telegram": AllowList(countries: ["RU"])]
+        let r = IRig(config: c)
+        try r.server.start()
+        let resp = r.ask(.allow("DE"))
+        expectEqual(resp?.ok, true)
+        expect(resp?.text.contains("Telegram") == true && resp?.text.contains("не действует") == true, resp?.text ?? "")
+    }
+
     test("testIPCAllowUnconfirmedCurrentIsRefused") {
         let r = IRig()
         r.eq.sync { r.engine.networkChanged(NetSnapshot(online: false, hasTunnel: false, gatewayIP: nil, gatewayMAC: nil, proxy: nil)) }

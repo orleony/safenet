@@ -18,8 +18,8 @@ struct SettingsTab: View {
             if model.configReadOnly { Note(LiveSystem.readOnlyMessage, symbol: "info.circle", color: p.frozen) }
             Card {
                 Text("Заморозка и закрытие").font(theme.font(12, weight: .semibold)).foregroundColor(p.text.swiftUIColor)
-                durationRow("Время заморозки", "Сколько ждать правильный IP, прежде чем выполнить действие ниже (5–600 с).",
-                            c.grace, 5...600) { v in model.update { $0.grace = v } }
+                durationRow("Время заморозки", "Сколько ждать правильный IP, прежде чем выполнить действие ниже (\(DurationInput.text(DurationInput.graceRange.lowerBound))–\(DurationInput.text(DurationInput.graceRange.upperBound)) с).",
+                            c.grace, DurationInput.graceRange) { v in model.update { $0.grace = v } }
                 SettingRow("Когда время вышло", detail: timeoutDetail(c.onTimeout)) {
                     Segmented(options: [(TimeoutAction.close, "Закрыть"), (.keepFrozen, "Держать замороженным"), (.resume, "Разморозить")],
                               selection: c.onTimeout) { v in model.update { $0.onTimeout = v } }
@@ -33,7 +33,8 @@ struct SettingsTab: View {
                 SettingRow("Без сети замораживать", detail: "Без сети ничего не утекает, поэтому приложения только замораживаются и никогда не закрываются.") {
                     toggle("Без сети замораживать", c.blockWhenOffline) { v in model.update { $0.blockWhenOffline = v } }
                 }
-                durationRow("Пауза по умолчанию, мин", "Длина «Паузы» из меню и Обзора (1–1440 мин).", c.pauseDefault / 60, 1...1440) { v in
+                durationRow("Пауза по умолчанию, мин", "Длина «Паузы» из меню и Обзора (1–1440 мин).", c.pauseDefault / 60, 1...1440,
+                            unit: .minutes) { v in
                     model.update { $0.pauseDefault = v * 60 }
                 }
             }
@@ -87,11 +88,11 @@ struct SettingsTab: View {
     }
 
     func durationRow(_ title: String, _ detail: String, _ value: Double, _ range: ClosedRange<Double>,
-                     _ set: @escaping (Double) -> Void) -> some View {
+                     unit: DurationInput.Unit = .seconds, _ set: @escaping (Double) -> Void) -> some View {
         SettingRow(title, detail: detail) {
             ValidatedField(label: title, placeholder: "", actionTitle: "OK", initial: DurationInput.text(value), width: 70,
-                           validate: { r in let x = DurationInput.parse(r, range: range); return InputCheck(value: x.value.map { DurationInput.text($0) }, error: x.error, warning: nil) },
-                           commit: { v in if let d = DurationInput.parse(v, range: range).value { set(d) } })
+                           validate: { r in let x = DurationInput.parse(r, range: range, unit: unit); return InputCheck(value: x.value.map { DurationInput.text($0) }, error: x.error, warning: nil) },
+                           commit: { v in if let d = DurationInput.parse(v, range: range, unit: unit).value { set(d) } })
                 .frame(width: 220, alignment: .trailing)
                 .id(value)                      // re-initialised after a hot reload changed the value
         }

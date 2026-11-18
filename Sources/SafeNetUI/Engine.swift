@@ -331,6 +331,8 @@ public final class Engine {
         /// The file could not be written (or the broken file could not be backed up first): in effect
         /// until restart only.
         case notSaved(String)
+        /// The change would make the config invalid: refused, nothing changed.
+        case invalid(String)
     }
 
     /// No-op after `shutdown()` (a queued action must not re-protect / re-freeze while exiting).
@@ -340,6 +342,11 @@ public final class Engine {
         var c = config
         mutate(&c)
         guard c != config else { return .unchanged }
+        do { try c.validate() } catch {
+            let m = "Изменение отклонено: \(Engine.safeDescription(error))"
+            onConfigError?(m)
+            return .invalid(m)
+        }
         var result = UpdateResult.saved
         if let msg = deps.configWritesBlocked {
             onNotice?(msg)

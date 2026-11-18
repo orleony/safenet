@@ -54,7 +54,7 @@ struct AllowListEditor: View {
                     .accessibilityLabel("Страна из списка")
                     Button("Добавить") {
                         let r = AllowInput.country(pick, existing: list.countries)
-                        if let v = r.value { change { $0.countries.append(v) } }
+                        if let v = r.value { change { l in if !l.countries.contains(v) { l.countries.append(v) } } }
                         pick = ""
                     }
                     .buttonStyle(SNButtonStyle(kind: .primary, theme: theme)).fixedSize()
@@ -62,7 +62,7 @@ struct AllowListEditor: View {
                 }
                 ValidatedField(label: "Код страны", placeholder: "или код: NL, DE…", actionTitle: "Добавить код", width: 160,
                                validate: { AllowInput.country($0, existing: list.countries) },
-                               commit: { v in change { $0.countries.append(v) } })
+                               commit: { v in change { l in if !l.countries.contains(v) { l.countries.append(v) } } })
             }
             Card {
                 Text("IP-адреса и подсети").font(theme.font(12, weight: .semibold)).foregroundColor(p.text.swiftUIColor)
@@ -75,7 +75,7 @@ struct AllowListEditor: View {
                 Rectangle().fill(p.hairline.swiftUIColor).frame(height: Metrics.hairlineWidth)
                 ValidatedField(label: "IP-адрес или подсеть", placeholder: "203.0.113.7 или 10.0.0.0/8", actionTitle: "Добавить",
                                validate: { AllowInput.ip($0, existing: list.ips) },
-                               commit: { v in change { $0.ips.append(v) } })
+                               commit: { v in change { l in if !l.ips.contains(v) { l.ips.append(v) } } })
             }
         }
     }

@@ -165,14 +165,22 @@ public enum CustomAppInput {
 // MARK: - Durations, accent
 
 public enum DurationInput {
-    /// Seconds ("20", "1,5", "2m", "1h") inside `range`.
-    public static func parse(_ raw: String, range: ClosedRange<Double>) -> InputCheck<Double> {
+    /// Freeze time (grace): one range for the common setting and per-app overrides.
+    public static let graceRange: ClosedRange<Double> = 5...600
+
+    public enum Unit { case seconds, minutes }
+
+    /// A duration in `unit` ("20", "1,5", or with a suffix "30s", "2m", "1h") inside `range`
+    /// (also in `unit`): with `.minutes` "2m" is 2 minutes and "90s" 1.5.
+    public static func parse(_ raw: String, range: ClosedRange<Double>, unit: Unit = .seconds) -> InputCheck<Double> {
         var t = raw.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: ",", with: ".").lowercased()
-        var mult = 1.0
-        if let last = t.last, "smh".contains(last) { mult = last == "s" ? 1 : last == "m" ? 60 : 3600; t.removeLast() }
-        let msg = "Введите число секунд от \(text(range.lowerBound)) до \(text(range.upperBound))"
+        var seconds: Double? = nil
+        if let last = t.last, "smh".contains(last) { seconds = last == "s" ? 1 : last == "m" ? 60 : 3600; t.removeLast() }
+        let perUnit: Double = unit == .seconds ? 1 : 60
+        let name = unit == .seconds ? "секунд" : "минут"
+        let msg = "Введите число \(name) от \(text(range.lowerBound)) до \(text(range.upperBound))"
         guard let d = Double(t.trimmingCharacters(in: .whitespaces)), d.isFinite else { return .fail(msg) }
-        let v = d * mult
+        let v = seconds.map { d * $0 / perUnit } ?? d
         return range.contains(v) ? .ok(v) : .fail(msg)
     }
 

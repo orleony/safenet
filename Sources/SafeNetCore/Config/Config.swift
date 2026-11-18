@@ -126,14 +126,21 @@ public struct Config: Equatable {
             }
         }
         c.normalisePresetIDs()
-        // Validation
-        guard c.grace > 0 else { throw ConfigError("grace must be > 0") }
-        guard c.closeTimeout >= 0 else { throw ConfigError("close_timeout must be >= 0") }
-        guard c.checkInterval > 0 else { throw ConfigError("check_interval must be > 0") }
-        guard c.pauseDefault > 0 else { throw ConfigError("pause_default must be > 0") }
-        guard c.minAgree >= 1 else { throw ConfigError("min_agree must be >= 1") }
-        for (k, g) in c.appGrace where g <= 0 { throw ConfigError("app_grace.\(k) must be > 0") }
+        try c.validate()
         self = c
+    }
+
+    /// Value checks shared by the YAML loader and in-app changes (`Engine.updateConfig`).
+    public func validate() throws {
+        func finite(_ v: Double, _ k: String) throws { guard v.isFinite else { throw ConfigError("\(k) must be a finite number") } }
+        try finite(grace, "grace"); try finite(closeTimeout, "close_timeout"); try finite(checkInterval, "check_interval")
+        try finite(pauseDefault, "pause_default")
+        guard grace > 0 else { throw ConfigError("grace must be > 0") }
+        guard closeTimeout >= 0 else { throw ConfigError("close_timeout must be >= 0") }
+        guard checkInterval > 0 else { throw ConfigError("check_interval must be > 0") }
+        guard pauseDefault > 0 else { throw ConfigError("pause_default must be > 0") }
+        guard minAgree >= 1 else { throw ConfigError("min_agree must be >= 1") }
+        for (k, g) in appGrace where !(g > 0) || !g.isFinite { throw ConfigError("app_grace.\(k) must be > 0") }
     }
 
     /// Preset ids in their canonical (lowercase) form, duplicates dropped, also as keys of

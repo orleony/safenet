@@ -187,7 +187,12 @@ struct SNSwitchStyle: ToggleStyle {
                 }
                 ZStack(alignment: on ? .trailing : .leading) {
                     Capsule().fill((on ? p.accent : p.hairline).swiftUIColor).frame(width: 30, height: 18)
-                    Circle().fill((on ? p.onAccent : p.muted).swiftUIColor).frame(width: 14, height: 14).padding(2)
+                    // White knob with a hairline and a soft shadow: readable on every accent
+                    // (onAccent is black on light accents such as orange).
+                    Circle().fill(Color.white).frame(width: 14, height: 14)
+                        .overlay(Circle().stroke(Color.black.opacity(0.18), lineWidth: 0.5))
+                        .shadow(color: Color.black.opacity(0.25), radius: 0.8, x: 0, y: 0.5)
+                        .padding(2)
                 }
             }
             .contentShape(Rectangle())

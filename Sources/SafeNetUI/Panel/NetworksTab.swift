@@ -5,7 +5,7 @@ import SafeNetCore
 struct NetworksTab: View {
     @ObservedObject var model: AppState
     @EnvironmentObject var theme: Theme
-    @State private var renaming: Int?
+    @State private var renaming: String?
 
     var body: some View {
         let p = theme.palette
@@ -23,7 +23,11 @@ struct NetworksTab: View {
                     Note("Эта сеть доверенная: VPN не требуется", symbol: "checkmark.seal", color: p.ok)
                 }
                 Button("Доверять этой сети") {
-                    if let n = trust.network { model.update { $0.trustedNetworks.append(n) } }
+                    if let n = trust.network {
+                        model.update { c in
+                            if !c.trustedNetworks.contains(where: { $0.mac == n.mac && $0.ip == n.ip }) { c.trustedNetworks.append(n) }
+                        }
+                    }
                 }
                 .buttonStyle(SNButtonStyle(kind: .primary, theme: theme)).fixedSize()
                 .disabled(trust.network == nil).opacity(trust.network == nil ? 0.5 : 1)
@@ -32,14 +36,23 @@ struct NetworksTab: View {
             Card {
                 Text("Список").font(theme.font(12, weight: .semibold)).foregroundColor(p.text.swiftUIColor)
                 if model.config.trustedNetworks.isEmpty { Note("Доверенных сетей нет — защита действует везде.") }
-                ForEach(Array(model.config.trustedNetworks.enumerated()), id: \.offset) { i, n in
-                    if renaming == i {
+                // Keyed by gateway MAC + IP (not the array index): a rename or a hot reload that
+                // reorders the list keeps the row and its editor on the right network.
+                ForEach(model.config.trustedNetworks, id: \.rowKey) { n in
+                    if renaming == n.rowKey {
                         ValidatedField(label: "Название сети", placeholder: "Дом", actionTitle: "Сохранить", initial: n.name,
                                        validate: { t in
-                                           if let e = NetworkInput.rename(t, index: i, in: model.config.trustedNetworks) { return .fail(e) }
+                                           let list = model.config.trustedNetworks
+                                           guard let i = list.firstIndex(where: { $0.rowKey == n.rowKey }) else { return .fail("Сеть уже удалена") }
+                                           if let e = NetworkInput.rename(t, index: i, in: list) { return .fail(e) }
                                            return .ok(t.trimmingCharacters(in: .whitespacesAndNewlines))
                                        },
-                                       commit: { v in model.update { c in if i < c.trustedNetworks.count { c.trustedNetworks[i].name = v } }; renaming = nil })
+                                       commit: { v in
+                                           model.update { c in
+                                               if let i = c.trustedNetworks.firstIndex(where: { $0.rowKey == n.rowKey }) { c.trustedNetworks[i].name = v }
+                                           }
+                                           renaming = nil
+                                       })
                     } else {
                         HStack(spacing: theme.spacing - 4) {
                             VStack(alignment: .leading, spacing: 1) {
@@ -48,7 +61,7 @@ struct NetworksTab: View {
                                     .textSelection(.enabled)
                             }
                             Spacer()
-                            Button("Переименовать") { renaming = i }
+                            Button("Переименовать") { renaming = n.rowKey }
                                 .buttonStyle(.plain).font(theme.font(11)).foregroundColor(p.accent.swiftUIColor)
                                 .accessibilityLabel("Переименовать \(n.name)")
                             Button { model.update { c in c.trustedNetworks.removeAll { $0 == n } } } label: { Image(systemName: "minus.circle") }
@@ -71,4 +84,9 @@ struct NetworksTab: View {
         if s.hasTunnel { parts.append("VPN активен") }
         return parts.joined(separator: " · ")
     }
+}
+
+extension TrustedNetwork {
+    /// Stable row identity for lists (gateway MAC + IP).
+    var rowKey: String { mac.lowercased() + "|" + ip }
 }

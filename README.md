@@ -28,8 +28,11 @@ only while apps are protected) asks the high-limit services `https://1.1.1.1/cdn
 ipinfo.io, ipapi.co, ifconfig.co and the IPv6-only v6.ident.me) runs at start, on network
 change, on wake, on a manual check, every 10 minutes, and whenever the tick sees another IP or
 too few answers. A new IP is never confirmed on fewer than `min_agree` answers. A service that
-fails (HTTP 429/5xx, transport error) is skipped for 60 s, doubling up to 60 min, reset on
-success; skipped services are simply missing from the answers.
+answers HTTP 429 or 5xx is skipped for 60 s, doubling up to 60 min, reset on success; transport
+errors and timeouts never back off; network change, wake and a manual check reset every backoff
+(a failure of a request started before the reset is not counted). Skipped services are simply
+missing from the answers. The deep check uses its own, unwrapped services. If a VPN routes
+1.1.1.1 outside the tunnel the cheap check never matches and every tick runs the full fan-out.
 
 ## The `safenet` command
 

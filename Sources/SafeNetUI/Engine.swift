@@ -50,6 +50,10 @@ public struct EngineDeps {
     public var cheapServiceCount = 2
     /// The full fan-out runs at least this often while apps are protected (10 min).
     public var fullRefreshInterval: TimeInterval = 600
+    /// Clears every IP service's rate-limit backoff. Called on network change, wake and the manual
+    /// check (never by the periodic tick / 10-minute refresh), so a check right after a VPN
+    /// reconnect asks every service.
+    public var resetBackoff: () -> Void = {}
     /// Non-nil: nothing is written to disk (test mode without SAFENET_CONFIG_DIR would otherwise
     /// put the fake IP/country into the user's real config.yaml). Changes still apply in memory;
     /// the message is reported through `onNotice`.
@@ -185,7 +189,9 @@ public final class Engine {
         guardian.adoptUnresolved(left)               // keep retrying them every tick
 
         guardian.onChange = { [weak self] _ in self?.publish() }
-        guardian.onCheckRequested = { [weak self] in self?.checkNow() }
+        // Guard requests (network change, wake, end of pause) do not reset the backoff themselves:
+        // networkChanged / didWake already did.
+        guardian.onCheckRequested = { [weak self] in self?.check(.full) }
         guardian.onAllowIP = { [weak self] ip in
             self?.updateConfig { c in if !c.allow.ips.contains(ip) { c.allow.ips.append(ip) } }
         }
@@ -236,6 +242,7 @@ public final class Engine {
         guard running else { return }
         snapshot = s
         netGen += 1
+        deps.resetBackoff()
         guardian.networkChanged()                   // requests a check through onCheckRequested
         updateRouteSchedule(after: 0)
     }
@@ -246,6 +253,7 @@ public final class Engine {
         guard running else { return }
         snapshot = nil                              // re-read: the network may be different now
         netGen += 1
+        deps.resetBackoff()
         guardian.didWake()
         guardian.networkChanged()
         updateRouteSchedule(after: 2)
@@ -253,7 +261,11 @@ public final class Engine {
 
     /// Starts a FULL check now (all services; coalesced with one in flight). Used at start, on
     /// network change / wake / end of pause (through the Guard) and by "Проверить сейчас".
-    public func checkNow() { check(.full) }
+    public func checkNow() {
+        guard running else { return }
+        deps.resetBackoff()                          // manual: ask every service, backoff or not
+        check(.full)
+    }
 
     private func check(_ mode: IPFetchMode) {
         guard running else { return }
@@ -440,7 +452,7 @@ public final class Engine {
         onConfig?(c)
         if lastSample != nil { evaluateAndApply() } else { publish() }
         // First protected app after a time without polling: the last answers may be old.
-        if !hadApps && !AppCatalog.appIDs(in: c).isEmpty { checkNow() }
+        if !hadApps && !AppCatalog.appIDs(in: c).isEmpty { check(.full) }
     }
 
     // MARK: Timers
@@ -481,7 +493,7 @@ public final class Engine {
             if gen == self.netGen {
                 self.routes = r
                 // Re-evaluate with the new route data; no IP fan-out just for a probe (quotas).
-                if self.lastSample != nil && !self.checking { self.evaluateAndApply() } else { self.checkNow() }
+                if self.lastSample != nil && !self.checking { self.evaluateAndApply() } else { self.check(.full) }
             }
             self.updateRouteSchedule(after: gen == self.netGen ? self.deps.routeInterval : 0)
         }

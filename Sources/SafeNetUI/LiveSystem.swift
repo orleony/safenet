@@ -51,6 +51,7 @@ public final class LiveSystem {
             return s
         }
         let deep: (@escaping (DeepCheckData) -> Void) -> Void
+        var resetBackoff: () -> Void = {}
         let resolversNow: () -> [DNSResolver]? = { currentDNSResolvers(runner: runner) }
         if let t = testMode {
             NSLog("SafeNet: TEST MODE (SAFENET_FAKE_IP=%@, offline=%@)",
@@ -88,6 +89,8 @@ public final class LiveSystem {
                                       BackoffIPService(HTTPIPService(spec: IPServiceSet.countryIs))]
             let limited: [IPService] = IPServiceSet.quotaLimitedSpecs.map { BackoffIPService(HTTPIPService(spec: $0)) }
             let six: IPService = BackoffIPService(HTTPIPService(spec: HTTPIPService.ipv6Only))
+            let backoffs = (cheap + limited + [six]).compactMap { $0 as? BackoffIPService }
+            resetBackoff = { backoffs.forEach { $0.reset() } }
             let cheapChecker = IPChecker(services: cheap, timeout: 6)
             let fullChecker = IPChecker(services: cheap + limited + [six], timeout: 6)
             fetch = { mode, cb in
@@ -95,8 +98,11 @@ public final class LiveSystem {
             }
             let rp = RouteProbe()
             probe = { hosts, cb in Task { let r = await rp.check(hosts: hosts); q.async { cb(r) } } }
-            let v4 = IPChecker(services: cheap + limited, timeout: 6)
-            let v6 = IPChecker(services: [six], timeout: 6)
+            // Deep check: its own unwrapped services, so it neither feeds nor obeys the shared backoff.
+            let deepV4: [IPService] = [TraceIPService(), HTTPIPService(spec: IPServiceSet.countryIs)]
+                + IPServiceSet.quotaLimitedSpecs.map { HTTPIPService(spec: $0) }
+            let v4 = IPChecker(services: deepV4, timeout: 6)
+            let v6 = IPChecker(services: [HTTPIPService(spec: HTTPIPService.ipv6Only)], timeout: 6)
             let snapFn = snapshotNow
             deep = { cb in
                 Task.detached {
@@ -114,6 +120,7 @@ public final class LiveSystem {
                               resolvers: resolversNow, snapshotNow: snapshotNow, queue: q)
         deepRunner = deep
         var d = deps
+        d.resetBackoff = resetBackoff
         if configReadOnly {
             d.configWritesBlocked = LiveSystem.readOnlyMessage
             NSLog("SafeNet: TEST MODE without SAFENET_CONFIG_DIR: config.yaml is read-only for this run")

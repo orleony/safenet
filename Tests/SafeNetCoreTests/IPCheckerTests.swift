@@ -213,7 +213,7 @@ func registerIPCheckerTests() {
     test("testBackedOffServiceIsAbsentFromAnswers") {
         let good = CountingService(IPAnswer(ip: "1.2.3.4", country: "NL"))
         let bad = CountingService(IPAnswer(ip: "9.9.9.9", country: "ZZ"))
-        bad.error = URLError(.timedOut)
+        bad.error = HTTPIPService.ServiceError.httpStatus(503)
         let clock = WallClock()
         let c = IPChecker(services: [BackoffIPService(good, now: { clock.t }), BackoffIPService(bad, now: { clock.t })], timeout: 1)
         expectEqual(awaitResult { await c.check() }, [IPAnswer(ip: "1.2.3.4", country: "NL")])
@@ -222,5 +222,81 @@ func registerIPCheckerTests() {
         expectEqual(bad.calls, 1)
         let each = awaitResult { await c.checkEach() }
         if case .failed(let why) = each[1].outcome { expect(why.contains("отложен"), why) } else { expect(false, "\(each[1].outcome)") }
+    }
+
+    // MARK: N1: backoff only for rate-limit signals, reset on demand, stale failures ignored
+
+    test("testBackoffIgnoresTransportErrorsAndTimeouts") {
+        let inner = CountingService(IPAnswer(ip: "1.2.3.4", country: "NL"))
+        let clock = WallClock()
+        let b = BackoffIPService(inner, now: { clock.t })
+        for e: Error in [URLError(.timedOut), URLError(.notConnectedToInternet), URLError(.networkConnectionLost),
+                         CancellationError(), HTTPIPService.ServiceError.badResponse, HTTPIPService.ServiceError.httpStatus(404)] {
+            inner.error = e
+            _ = awaitResult { try? await b.fetch() }
+            expectEqual(b.currentDelay, 0, "no backoff for \(e)")
+        }
+        expectEqual(inner.calls, 6, "asked every time")
+        inner.error = HTTPIPService.ServiceError.httpStatus(502)
+        _ = awaitResult { try? await b.fetch() }
+        expectEqual(b.currentDelay, 60, "5xx backs off")
+        expect(BackoffIPService.countsAsRateLimit(HTTPIPService.ServiceError.rateLimited))
+        expect(BackoffIPService.countsAsRateLimit(HTTPIPService.ServiceError.httpStatus(500)))
+        expect(!BackoffIPService.countsAsRateLimit(URLError(.timedOut)))
+    }
+    test("testBackoffResetLetsServiceBeAskedAgain") {
+        let inner = CountingService(IPAnswer(ip: "1.2.3.4", country: "NL"))
+        let clock = WallClock()
+        let b = BackoffIPService(inner, now: { clock.t })
+        inner.error = HTTPIPService.ServiceError.rateLimited
+        _ = awaitResult { try? await b.fetch() }
+        inner.error = nil
+        let skipped: IPAnswer? = awaitResult { try? await b.fetch() }
+        expectEqual(skipped, nil)
+        b.reset()
+        expectEqual(b.currentDelay, 0)
+        let again: IPAnswer? = awaitResult { try? await b.fetch() }
+        expectEqual(again, IPAnswer(ip: "1.2.3.4", country: "NL"), "asked again after reset")
+        expectEqual(inner.calls, 2)
+    }
+    test("testBackoffIgnoresFailureOfAFetchStartedBeforeReset") {
+        let clock = WallClock()
+        let gate = GatedService()
+        let b = BackoffIPService(gate, now: { clock.t })
+        let sem = DispatchSemaphore(value: 0)
+        Task { _ = try? await b.fetch(); sem.signal() }
+        gate.waitUntilStarted()
+        b.reset()                                     // network changed while it ran
+        gate.finish(with: HTTPIPService.ServiceError.rateLimited)
+        sem.wait()
+        expectEqual(b.currentDelay, 0, "a failure from a discarded generation is not counted")
+    }
+}
+
+/// Fetch that blocks until `finish` (to interleave a reset with an in-flight request).
+private final class GatedService: IPService {
+    private let started = DispatchSemaphore(value: 0)
+    private let lock = NSLock()
+    private var cont: CheckedContinuation<Void, Never>?
+    private var err: Error?
+    private var done = false
+    func fetch() async throws -> IPAnswer {
+        await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
+            if !park(c) { c.resume() }
+            started.signal()
+        }
+        if let e = currentError() { throw e }
+        return IPAnswer(ip: "1.2.3.4", country: "NL")
+    }
+    private func park(_ c: CheckedContinuation<Void, Never>) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        if done { return false }
+        cont = c; return true
+    }
+    private func currentError() -> Error? { lock.lock(); defer { lock.unlock() }; return err }
+    func waitUntilStarted() { started.wait() }
+    func finish(with e: Error?) {
+        lock.lock(); err = e; done = true; let c = cont; cont = nil; lock.unlock()
+        c?.resume()
     }
 }

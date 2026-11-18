@@ -50,6 +50,10 @@ private final class ERig {
     var held: (() -> Void)?
     var engine: Engine!
     var errors: [String] = []
+    var backoffResets = 0
+    var backoffResetsHook: (() -> Void)?
+    /// Optional real fetcher (an IPChecker over backoff-wrapped fakes) used instead of `answers`.
+    var realFetch: ((IPFetchMode) -> [IPAnswer])?
 
     var notices: [String] = []
     /// Test mode without SAFENET_CONFIG_DIR: disk writes refused with this message.
@@ -74,6 +78,7 @@ private final class ERig {
             fetchAnswers: { [unowned self] mode, cb in
                 self.fetchCalls += 1
                 self.modes.append(mode)
+                if let rf = self.realFetch { cb(rf(mode)); return }
                 let now = mode == .cheap ? (self.cheapAnswers ?? self.answers) : self.answers
                 if self.holdFetch { self.held = { cb(now) } } else { cb(now) }
             },
@@ -82,6 +87,7 @@ private final class ERig {
             snapshotNow: { online }, queue: nil)
         deps.tickInterval = 1
         deps.configWritesBlocked = writesBlocked
+        deps.resetBackoff = { [unowned self] in self.backoffResets += 1; self.backoffResetsHook?() }
         engine = Engine(deps: deps)
         engine.onConfigError = { [unowned self] in self.errors.append($0) }
         engine.onNotice = { [unowned self] in self.notices.append($0) }
@@ -617,5 +623,60 @@ func registerEngineTests() {
         expectEqual(ev.first?.detail, "", "no IP in the event")
         r.engine.checkNow()
         expectEqual(r.engine.log.recent(limit: 50, kinds: [.ipChanged]).count, 1, "unchanged: no new event")
+    }
+
+    // MARK: N1: backoff reset on network change / wake / manual check
+
+    test("testEngineResetsBackoffOnNetworkChangeWakeAndManualCheckOnly") {
+        let r = ERig(config: tiered())
+        r.engine.start(watchConfig: false)
+        r.engine.networkChanged(online)
+        let n0 = r.backoffResets
+        expect(n0 >= 1, "network change resets")
+        r.clock.advance(by: 30)
+        expectEqual(r.backoffResets, n0, "the 5 s tick never resets (quota-limited services stay protected)")
+        r.clock.advance(by: 600)
+        expectEqual(r.backoffResets, n0, "nor does the 10-minute full refresh")
+        r.engine.checkNow()
+        expectEqual(r.backoffResets, n0 + 1, "manual check resets")
+        r.engine.didWake()
+        expectEqual(r.backoffResets, n0 + 2, "wake resets")
+    }
+    test("testEngineServicesBackedOffBy429AreAskedAgainAfterNetworkChange") {
+        final class Svc: IPService {
+            var calls = 0, failing = true
+            let name: String
+            init(_ n: String) { name = n }
+            func fetch() async throws -> IPAnswer {
+                calls += 1
+                if failing { throw HTTPIPService.ServiceError.rateLimited }
+                return IPAnswer(ip: "5.6.7.8", country: "RU")
+            }
+        }
+        let a1 = Svc("a"), a2 = Svc("b")
+        let wall = FakeClock(start: Date(timeIntervalSince1970: 1_800_000_000))
+        let wrapped = [BackoffIPService(a1, now: { wall.now }), BackoffIPService(a2, now: { wall.now })]
+        let checker = IPChecker(services: wrapped, timeout: 2)
+        let r = ERig(config: tiered())
+        r.realFetch = { _ in
+            final class Box { var v: [IPAnswer] = [] }
+            let sem = DispatchSemaphore(value: 0), box = Box()
+            Task { box.v = await checker.check(); sem.signal() }
+            sem.wait()
+            return box.v
+        }
+        r.rebuild()
+        r.engine.start(watchConfig: false)
+        r.engine.networkChanged(online)              // both fail with 429: backed off
+        expect(r.engine.guardian.frozenApps == ["telegram"])
+        a1.failing = false; a2.failing = false
+        let c = a1.calls
+        r.clock.advance(by: 5)                       // tick: still backed off, nothing asked
+        expectEqual(a1.calls, c, "429 backs off on normal ticks")
+        // The LiveSystem wires resetBackoff to these wrappers; do the same here.
+        r.backoffResetsHook = { wrapped.forEach { $0.reset() } }
+        r.engine.networkChanged(online)
+        expect(a1.calls > c, "asked again after a network change")
+        expectEqual(r.engine.status.state, .ok, "confirmed again: nothing closes")
     }
 }

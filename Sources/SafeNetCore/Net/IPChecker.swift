@@ -344,10 +344,13 @@ public enum IPServiceSet {
 /// Mode of one engine check (see `IPServiceSet`).
 public enum IPFetchMode: Equatable { case cheap, full }
 
-/// Wraps a service with per-service exponential backoff: after a failure (HTTP 429/5xx, other
-/// status, transport error, timeout) the service is not contacted for 60 s, doubling on every
-/// further failure up to 60 min; a success resets it. While backed off `fetch()` throws
-/// `Skipped` at once, so the service is simply absent from the answers (never fabricated).
+/// Wraps a service with per-service exponential backoff against RATE LIMITS only: after HTTP 429
+/// or 5xx the service is not contacted for 60 s, doubling on every further one up to 60 min; a
+/// success resets it. Transport errors, timeouts, offline, other statuses and bad bodies never
+/// back off (they say nothing about quotas, and backing off on them would starve the check that
+/// follows a VPN reconnect). `reset()` (network change, wake, manual check) clears it and bumps a
+/// generation: a request started before the reset never counts. While backed off `fetch()`
+/// throws `Skipped` at once, so the service is simply absent from the answers (never fabricated).
 public final class BackoffIPService: IPService {
     public enum Skipped: Error { case backedOff }
     public static let base: TimeInterval = 60
@@ -358,6 +361,7 @@ public final class BackoffIPService: IPService {
     private let lock = NSLock()
     private var delay: TimeInterval = 0
     private var until: Date?
+    private var generation = 0
 
     /// Wall clock on purpose: after a long sleep the backoff is over (uptime would not advance).
     public init(_ inner: IPService, now: @escaping () -> Date = Date.init) {
@@ -368,26 +372,45 @@ public final class BackoffIPService: IPService {
     /// Current backoff length (0 = none).
     public var currentDelay: TimeInterval { lock.lock(); defer { lock.unlock() }; return delay }
 
+    /// HTTP 429 and 5xx: the only failures that back off.
+    public static func countsAsRateLimit(_ e: Error) -> Bool {
+        guard let s = e as? HTTPIPService.ServiceError else { return false }
+        switch s {
+        case .rateLimited: return true
+        case .httpStatus(let c): return (500...599).contains(c)
+        case .badResponse: return false
+        }
+    }
+
+    /// Forget the backoff (and ignore the outcome of requests already in flight).
+    public func reset() { lock.lock(); delay = 0; until = nil; generation += 1; lock.unlock() }
+
     public func fetch() async throws -> IPAnswer {
-        if isBackedOff() { throw Skipped.backedOff }
+        guard let gen = startIfAllowed() else { throw Skipped.backedOff }
         do {
             let a = try await inner.fetch()
-            succeeded()
+            finished(gen, failure: nil)
             return a
         } catch {
-            failed()
+            finished(gen, failure: error)
             throw error
         }
     }
 
-    private func isBackedOff() -> Bool {
+    private func startIfAllowed() -> Int? {
         lock.lock(); defer { lock.unlock() }
-        return until.map { now() < $0 } ?? false
+        if let u = until, now() < u { return nil }
+        return generation
     }
-    private func succeeded() { lock.lock(); delay = 0; until = nil; lock.unlock() }
-    private func failed() {
+    private func finished(_ gen: Int, failure: Error?) {
         lock.lock(); defer { lock.unlock() }
-        delay = delay == 0 ? BackoffIPService.base : min(delay * 2, BackoffIPService.cap)
-        until = now().addingTimeInterval(delay)
+        guard gen == generation else { return }          // started before a reset: discarded
+        if let e = failure {
+            guard BackoffIPService.countsAsRateLimit(e) else { return }
+            delay = delay == 0 ? BackoffIPService.base : min(delay * 2, BackoffIPService.cap)
+            until = now().addingTimeInterval(delay)
+        } else {
+            delay = 0; until = nil
+        }
     }
 }

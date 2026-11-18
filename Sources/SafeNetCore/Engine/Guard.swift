@@ -171,12 +171,7 @@ public final class Guard {
             for id in Array(apps.keys) { release(id) }
             apps = [:]
             record(.paused, nil, "pause")
-            pauseTimer?.cancel()
-            pauseGen += 1
-            let gen = pauseGen
-            pauseTimer = clock.schedule(after: len) { [weak self] in
-                self?.perform { self?.pauseFired(gen) }
-            }
+            schedulePauseTimer(after: len)
             reconcileProcesses()
         }
     }
@@ -245,7 +240,12 @@ public final class Guard {
     public func didWake() {
         perform {
             sleeping = false
-            if let u = pausedUntil, clock.now >= u { endPause() }
+            // The pause end is a wall-clock time the user sees ("Пауза до HH:MM"), but its timer
+            // runs on uptime, which stops during sleep: re-arm it for the remaining wall time.
+            if let u = pausedUntil {
+                let left = u.timeIntervalSince(clock.now)
+                if left <= 0 { endPause() } else { schedulePauseTimer(after: left) }
+            }
             let up = clock.uptime
             for id in ids() where apps[id]?.phase == .frozen && apps[id]?.deadline != nil && !emptyAllow(id) {
                 apps[id]?.deadline = up + grace(id)
@@ -484,6 +484,15 @@ public final class Guard {
         for p in procs { closing[p.pid] = p.startTime }
         let run = _runClose, gentle = config.closeTimeout
         effects.append { run(procs, gentle) }
+    }
+
+    private func schedulePauseTimer(after len: TimeInterval) {
+        pauseTimer?.cancel()
+        pauseGen += 1
+        let gen = pauseGen
+        pauseTimer = clock.schedule(after: len) { [weak self] in
+            self?.perform { self?.pauseFired(gen) }
+        }
     }
 
     private func pauseFired(_ gen: Int) {

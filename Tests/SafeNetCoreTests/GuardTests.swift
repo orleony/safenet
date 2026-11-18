@@ -835,4 +835,26 @@ func registerGuardC2Tests() {
         expectEqual(r.closedBatches, [[100]], "claude closes after grace, telegram (empty rule) never")
         expectEqual(g.frozenApps, ["telegram"])
     }
+
+    // MARK: I2: the pause ends at its wall-clock time also across sleep
+
+    test("testPauseEndsAtWallClockTimeAfterSleep") {
+        let r = Rig(); let g = r.guardian
+        g.pause(for: 300)
+        guard case .paused(let until) = g.state else { return expect(false, "\(g.state)") }
+        g.willSleep()
+        r.clock.jumpWallClock(by: 250)                // slept 250 s: uptime did not advance
+        g.didWake()
+        expectEqual(g.state, .paused(until: until), "still paused until the shown time")
+        r.clock.advance(by: 51)
+        expect(g.state != .paused(until: until), "pause over at 'Пауза до HH:MM', not 250 s later: \(g.state)")
+    }
+    test("testPauseAlreadyOverAtWakeEndsImmediately") {
+        let r = Rig(); let g = r.guardian
+        g.pause(for: 60)
+        g.willSleep()
+        r.clock.jumpWallClock(by: 600)
+        g.didWake()
+        if case .paused = g.state { expect(false, "pause must be over") }
+    }
 }

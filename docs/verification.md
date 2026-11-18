@@ -31,7 +31,7 @@ Identifier=local.safenet.app
 Format=app bundle with Mach-O universal (x86_64 arm64)
 CodeDirectory v=20500 size=25106 flags=0x10002(adhoc,runtime) hashes=778+3 location=embedded
 Signature=adhoc
-070b7cc4061169472560d1859f187dbd2ef9d59e1767578187ab51aff1f80c19  SafeNet.zip
+543e203f959edd482d7beff2531e06fc71bcb507e0e81876b9939e36b3d828fd  SafeNet.zip
 ```
 
 Подпись: `codesign --force --deep --sign - --options runtime --timestamp=none`. Hardened runtime

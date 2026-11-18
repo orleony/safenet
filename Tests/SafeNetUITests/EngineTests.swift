@@ -578,4 +578,19 @@ func registerEngineTests() {
         if case .frozen(_, let reason, _) = r.engine.status.state { expectEqual(reason, .routeLeak) }
         expectEqual(r.engine.status.observation?.routeLeak, true, "display flag: some app sees a leak")
     }
+
+    test("testToggleAppIsCaseInsensitiveForPresets") {
+        var c = cfg(); c.apps = ["Telegram"]           // e.g. set in code, not through the YAML loader
+        let r = ERig(config: nil)
+        try? r.store.save(c)
+        r.rebuild()
+        r.engine.start(watchConfig: false)
+        expectEqual(r.engine.config.apps, ["telegram"], "normalised at load")
+        r.engine.toggleApp("telegram")
+        expectEqual(r.engine.config.apps, [], "toggle turns it off")
+        r.engine.toggleApp("Telegram")
+        expectEqual(r.engine.config.apps, ["telegram"], "canonical id appended")
+        r.engine.toggleApp("TELEGRAM")
+        expectEqual(r.engine.config.apps, [])
+    }
 }

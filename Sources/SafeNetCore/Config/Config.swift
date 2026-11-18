@@ -125,6 +125,7 @@ public struct Config: Equatable {
                                subnet: try Config.str($0["subnet"], "trusted_networks.subnet"))
             }
         }
+        c.normalisePresetIDs()
         // Validation
         guard c.grace > 0 else { throw ConfigError("grace must be > 0") }
         guard c.closeTimeout >= 0 else { throw ConfigError("close_timeout must be >= 0") }
@@ -133,6 +134,23 @@ public struct Config: Equatable {
         guard c.minAgree >= 1 else { throw ConfigError("min_agree must be >= 1") }
         for (k, g) in c.appGrace where g <= 0 { throw ConfigError("app_grace.\(k) must be > 0") }
         self = c
+    }
+
+    /// Preset ids in their canonical (lowercase) form, duplicates dropped, also as keys of
+    /// `app_rules` / `app_grace` (a hand-edited `Claude` would otherwise never toggle off).
+    /// Custom app names are kept exactly.
+    public mutating func normalisePresetIDs() {
+        let custom = Set(customApps.map { $0.name })
+        func canon(_ id: String) -> String { custom.contains(id) ? id : (AppCatalog.preset(id)?.id ?? id) }
+        var seen = Set<String>(), out: [String] = []
+        for id in apps.map(canon) where seen.insert(id).inserted { out.append(id) }
+        apps = out
+        var rules: [String: AllowList] = [:]
+        for k in appRules.keys.sorted() where rules[canon(k)] == nil { rules[canon(k)] = appRules[k] }
+        appRules = rules
+        var grace: [String: TimeInterval] = [:]
+        for k in appGrace.keys.sorted() where grace[canon(k)] == nil { grace[canon(k)] = appGrace[k] }
+        appGrace = grace
     }
 
     // MARK: Config -> YAML

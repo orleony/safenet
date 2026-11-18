@@ -44,11 +44,11 @@ func registerConfigTests() {
 
     test("testRoundTripYAML") {
         var c = Config.default
-        c.apps = ["Claude", "Cursor"]
+        c.apps = ["claude", "cursor"]
         c.customApps = [CustomApp(name: "My Tool", match: "args:--ai"), CustomApp(name: "X: y", match: "#odd")]
         c.allow = AllowList(ips: ["203.0.113.7"], countries: ["NL", "NO"])
-        c.appRules = ["Claude": AllowList(ips: [], countries: ["US"])]
-        c.appGrace = ["Cursor": 45.5]
+        c.appRules = ["claude": AllowList(ips: [], countries: ["US"])]
+        c.appGrace = ["cursor": 45.5]
         c.grace = 30
         c.onTimeout = .keepFrozen
         c.dnsCheck = .block
@@ -84,7 +84,7 @@ func registerConfigTests() {
         try "grace: 1m\napps:\n  - Claude\n".write(to: url, atomically: true, encoding: .utf8)
         let c = try ConfigStore(url: url).load()
         expectEqual(c.grace, 60)
-        expectEqual(c.apps, ["Claude"])
+        expectEqual(c.apps, ["claude"], "preset id normalised")
         expectEqual(c.minAgree, 2)
     }
 
@@ -266,5 +266,13 @@ func registerConfigTests() {
         try store.save(.default)
         for _ in 0..<50 { store.watch(queue: DispatchQueue(label: "test.cycle"), pollInterval: 0.01) { _ in }; store.stopWatching() }
         expect(true)
+    }
+
+    test("testPresetIDsNormalisedToCanonicalCaseAtLoad") {
+        let y = try MiniYAML.parse("apps: [Claude, TELEGRAM, claude, MyTool]\ncustom_apps:\n  - name: MyTool\n    match: mytool\napp_rules:\n  Claude:\n    countries: [NL]\napp_grace:\n  Telegram: 30s\n")
+        let c = try Config(yaml: y)
+        expectEqual(c.apps, ["claude", "telegram", "MyTool"], "canonical preset ids, duplicates dropped, custom names kept")
+        expectEqual(c.appRules["claude"], AllowList(countries: ["NL"]))
+        expectEqual(c.appGrace["telegram"], 30)
     }
 }

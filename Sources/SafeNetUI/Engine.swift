@@ -399,9 +399,18 @@ public final class Engine {
         return true
     }
 
+    /// Presets are matched case-insensitively (as `AppCatalog.preset` and the UI do) and stored
+    /// under their canonical id; custom app names exactly.
     public func toggleApp(_ id: String) {
         updateConfig { c in
-            if let i = c.apps.firstIndex(of: id) { c.apps.remove(at: i) } else { c.apps.append(id) }
+            let custom = c.customApps.contains { $0.name == id }
+            let canon = custom ? id : (AppCatalog.preset(id)?.id ?? id)
+            let customNames = Set(c.customApps.map { $0.name })
+            let exact = custom || AppCatalog.preset(id) == nil
+            let same: (String) -> Bool = { s in
+                exact ? s == id : (AppCatalog.preset(s)?.id == canon && !customNames.contains(s))
+            }
+            if c.apps.contains(where: same) { c.apps.removeAll(where: same) } else { c.apps.append(canon) }
         }
     }
 

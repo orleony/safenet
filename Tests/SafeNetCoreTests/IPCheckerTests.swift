@@ -15,14 +15,32 @@ private func now() -> Double { Date().timeIntervalSince1970 }
 private let spec = HTTPIPService.Spec(url: URL(string: "https://example.invalid/json")!, ipField: "ip", countryField: "country")
 private func parse(_ s: String) -> IPAnswer? { HTTPIPService.parse(Data(s.utf8), spec: spec) }
 
-/// A service that ignores cancellation (blocks a thread-free sleep via continuation-less polling).
+/// A service that ignores cancellation: it waits on a continuation that only a timer resumes
+/// (no polling loop, so a cancelled task cannot spin).
 private struct StubbornService: IPService {
     func fetch() async throws -> IPAnswer {
-        let end = now() + 3
-        while now() < end { _ = try? await Task.sleep(nanoseconds: 50_000_000) }
+        await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
+            DispatchQueue.global().asyncAfter(deadline: .now() + 3) { c.resume() }
+        }
         return IPAnswer(ip: "9.9.9.9", country: "ZZ")
     }
 }
+
+/// Counts calls; fails with `error` while it is set.
+private final class CountingService: IPService {
+    var calls = 0
+    var error: Error?
+    let answer: IPAnswer
+    init(_ a: IPAnswer) { answer = a }
+    func fetch() async throws -> IPAnswer {
+        calls += 1
+        if let e = error { throw e }
+        return answer
+    }
+    var name: String { "count.example" }
+}
+
+private final class WallClock { var t = Date(timeIntervalSince1970: 1_800_000_000) }
 
 func registerIPCheckerTests() {
     test("testReturnsOnlySuccessfulAnswers") {
@@ -137,5 +155,72 @@ func registerIPCheckerTests() {
     }
     test("testDefaultServicesConfigured") {
         expect(HTTPIPService.defaults.count >= 3)
+    }
+
+    // MARK: Cloudflare trace service, HTTP status handling, backoff (C1)
+
+    test("testTraceServiceParsesCloudflareTrace") {
+        let body = "fl=1\nh=1.1.1.1\nip=203.0.113.7\nts=1\nvisit_scheme=https\nloc=nl\ntls=TLSv1.3\n"
+        expectEqual(TraceIPService.parse(body), IPAnswer(ip: "203.0.113.7", country: "NL"))
+        expectEqual(TraceIPService.parse("ip=203.0.113.7\n"), nil)
+        expectEqual(TraceIPService.parse("<html>"), nil)
+        expectEqual(TraceIPService.cloudflare.url.absoluteString, "https://1.1.1.1/cdn-cgi/trace")
+        expectEqual(TraceIPService(url: TraceIPService.cloudflare.url).name, "1.1.1.1")
+    }
+    test("testCheapServicesAreTraceAndCountryIs") {
+        expectEqual(IPServiceSet.cheapHosts, ["1.1.1.1", "api.country.is"])
+        expect(!IPServiceSet.quotaLimitedSpecs.map { $0.url.host ?? "" }.contains("api.country.is"))
+        expectEqual(Set(IPServiceSet.quotaLimitedSpecs.compactMap { $0.url.host }), ["ipinfo.io", "ipapi.co", "ifconfig.co"])
+    }
+    test("testHTTPStatusInterpretation") {
+        let ok = Data(#"{"ip":"1.2.3.4","country":"NL"}"#.utf8)
+        expectEqual(try? HTTPIPService.interpret(status: 200, data: ok, spec: spec), IPAnswer(ip: "1.2.3.4", country: "NL"))
+        do { _ = try HTTPIPService.interpret(status: 429, data: ok, spec: spec); expect(false, "429 must throw") }
+        catch let e as HTTPIPService.ServiceError { expectEqual(e, .rateLimited) }
+        catch { expect(false, "wrong error \(error)") }
+        do { _ = try HTTPIPService.interpret(status: 503, data: ok, spec: spec); expect(false, "503 must throw") }
+        catch let e as HTTPIPService.ServiceError { expectEqual(e, .httpStatus(503)) }
+        catch { expect(false, "wrong error \(error)") }
+        expectEqual(ServiceResult.reason(HTTPIPService.ServiceError.rateLimited), "лимит запросов (HTTP 429)")
+    }
+    test("testBackoffSkipsFailedServiceAndGrowsExponentially") {
+        let inner = CountingService(IPAnswer(ip: "1.2.3.4", country: "NL"))
+        let clock = WallClock()
+        let b = BackoffIPService(inner, now: { clock.t })
+        inner.error = HTTPIPService.ServiceError.rateLimited
+        _ = awaitResult { try? await b.fetch() }
+        expectEqual(inner.calls, 1)
+        expectEqual(b.currentDelay, 60)
+        clock.t += 30
+        let skipped: IPAnswer? = awaitResult { try? await b.fetch() }
+        expectEqual(skipped, nil)
+        expectEqual(inner.calls, 1, "backed off: not contacted")
+        clock.t += 31
+        _ = awaitResult { try? await b.fetch() }
+        expectEqual(inner.calls, 2)
+        expectEqual(b.currentDelay, 120, "second failure doubles")
+        for _ in 0..<10 { clock.t += 4000; _ = awaitResult { try? await b.fetch() } }
+        expectEqual(b.currentDelay, 3600, "capped at 60 min")
+        inner.error = nil
+        clock.t += 3601
+        let back: IPAnswer? = awaitResult { try? await b.fetch() }
+        expectEqual(back, IPAnswer(ip: "1.2.3.4", country: "NL"))
+        expectEqual(b.currentDelay, 0, "success resets")
+        let again: IPAnswer? = awaitResult { try? await b.fetch() }
+        expectEqual(again, IPAnswer(ip: "1.2.3.4", country: "NL"), "no backoff after a success")
+        expectEqual(b.name, "count.example")
+    }
+    test("testBackedOffServiceIsAbsentFromAnswers") {
+        let good = CountingService(IPAnswer(ip: "1.2.3.4", country: "NL"))
+        let bad = CountingService(IPAnswer(ip: "9.9.9.9", country: "ZZ"))
+        bad.error = URLError(.timedOut)
+        let clock = WallClock()
+        let c = IPChecker(services: [BackoffIPService(good, now: { clock.t }), BackoffIPService(bad, now: { clock.t })], timeout: 1)
+        expectEqual(awaitResult { await c.check() }, [IPAnswer(ip: "1.2.3.4", country: "NL")])
+        bad.error = nil
+        expectEqual(awaitResult { await c.check() }, [IPAnswer(ip: "1.2.3.4", country: "NL")], "skipped, never fabricated")
+        expectEqual(bad.calls, 1)
+        let each = awaitResult { await c.checkEach() }
+        if case .failed(let why) = each[1].outcome { expect(why.contains("отложен"), why) } else { expect(false, "\(each[1].outcome)") }
     }
 }

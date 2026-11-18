@@ -29,7 +29,14 @@ public struct ServiceResult: Equatable {
 
     static func reason(_ e: Error) -> String {
         if let u = e as? URLError { return "URLError \(u.code.rawValue)" }
-        if e is HTTPIPService.ServiceError { return "bad response" }
+        if let s = e as? HTTPIPService.ServiceError {
+            switch s {
+            case .rateLimited: return "лимит запросов (HTTP 429)"
+            case .httpStatus(let c): return "HTTP \(c)"
+            case .badResponse: return "bad response"
+            }
+        }
+        if e is BackoffIPService.Skipped { return "отложен после ошибки (повтор позже)" }
         let n = e as NSError
         return "\(n.domain) \(n.code)"
     }
@@ -199,9 +206,15 @@ public struct HTTPIPService: IPService {
         }
     }
 
-    public enum ServiceError: Error { case badResponse }
+    public enum ServiceError: Error, Equatable {
+        case badResponse
+        /// HTTP 429: the free quota is used up (the caller backs off).
+        case rateLimited
+        /// Any other non-2xx status.
+        case httpStatus(Int)
+    }
 
-    /// Free, no-key endpoints.
+    /// Free, no-key endpoints (IPv4 quorum services; see `IPServiceSet` for which are polled when).
     public static let defaults: [Spec] = [
         Spec(url: URL(string: "https://ipinfo.io/json")!, ipField: "ip", countryField: "country"),
         Spec(url: URL(string: "https://ipapi.co/json")!, ipField: "ip", countryField: "country_code"),
@@ -240,8 +253,15 @@ public struct HTTPIPService: IPService {
         req.httpMethod = "GET"
         req.timeoutInterval = requestTimeout
         let (data, resp) = try await session.data(for: req)
-        guard let http = resp as? HTTPURLResponse, (200..<300).contains(http.statusCode),
-              let a = HTTPIPService.parse(data, spec: spec) else { throw ServiceError.badResponse }
+        guard let http = resp as? HTTPURLResponse else { throw ServiceError.badResponse }
+        return try HTTPIPService.interpret(status: http.statusCode, data: data, spec: spec)
+    }
+
+    /// Pure: status code + body -> answer. 429 = quota used up; other non-2xx = `httpStatus`.
+    public static func interpret(status: Int, data: Data, spec: Spec) throws -> IPAnswer {
+        if status == 429 { throw ServiceError.rateLimited }
+        guard (200..<300).contains(status) else { throw ServiceError.httpStatus(status) }
+        guard let a = parse(data, spec: spec) else { throw ServiceError.badResponse }
         return a
     }
 
@@ -259,5 +279,110 @@ public struct HTTPIPService: IPService {
     public static func isValidIP(_ s: String) -> Bool {
         var v4 = in_addr(), v6 = in6_addr()
         return inet_pton(AF_INET, s, &v4) == 1 || inet_pton(AF_INET6, s, &v6) == 1
+    }
+}
+
+/// Cloudflare's trace endpoint on the anycast address (`ip=` / `loc=` lines, no key, high limit).
+/// Redirects are refused; the body is capped at 4 KB.
+public struct TraceIPService: IPService {
+    public static let cloudflare = (url: URL(string: "https://1.1.1.1/cdn-cgi/trace")!, ())
+    public let url: URL
+    public let requestTimeout: TimeInterval
+    public var name: String { url.host ?? "IP-сервис" }
+    private let session: URLSession
+
+    public init(url: URL = TraceIPService.cloudflare.url, requestTimeout: TimeInterval = 5) {
+        self.url = url
+        self.requestTimeout = requestTimeout
+        let cfg = URLSessionConfiguration.ephemeral
+        cfg.timeoutIntervalForRequest = requestTimeout
+        cfg.timeoutIntervalForResource = requestTimeout
+        cfg.httpCookieStorage = nil
+        cfg.httpShouldSetCookies = false
+        cfg.urlCache = nil
+        cfg.requestCachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+        cfg.urlCredentialStorage = nil
+        cfg.httpAdditionalHeaders = ["User-Agent": "SafeNet", "Accept": "text/plain"]
+        session = URLSession(configuration: cfg)
+    }
+
+    public func fetch() async throws -> IPAnswer {
+        var req = URLRequest(url: url)
+        req.httpMethod = "GET"
+        req.timeoutInterval = requestTimeout
+        let (bytes, resp) = try await session.bytes(for: req, delegate: NoRedirectDelegate())
+        guard let http = resp as? HTTPURLResponse else { throw HTTPIPService.ServiceError.badResponse }
+        if http.statusCode == 429 { throw HTTPIPService.ServiceError.rateLimited }
+        guard http.statusCode == 200 else { throw HTTPIPService.ServiceError.httpStatus(http.statusCode) }
+        var data = Data()
+        for try await b in bytes {
+            data.append(b)
+            if data.count >= 4096 { break }
+        }
+        guard let a = TraceIPService.parse(String(decoding: data, as: UTF8.self)) else {
+            throw HTTPIPService.ServiceError.badResponse
+        }
+        return a
+    }
+
+    /// Same parser as the route probe (`parseTrace`).
+    public static func parse(_ text: String) -> IPAnswer? {
+        parseTrace(text).map { IPAnswer(ip: $0.ip, country: $0.loc) }
+    }
+}
+
+/// Which services are asked when (spec ruling R1, "tiered polling"):
+///  - CHEAP (periodic tick every `check_interval`): Cloudflare trace on 1.1.1.1 + api.country.is;
+///  - FULL fan-out (start, network change, wake, manual check, any doubt, every 10 min):
+///    cheap + the quota-limited ipinfo.io / ipapi.co / ifconfig.co + the IPv6-only service.
+public enum IPServiceSet {
+    public static let cheapHosts = ["1.1.1.1", "api.country.is"]
+    public static let countryIs = HTTPIPService.defaults[3]
+    public static let quotaLimitedSpecs = Array(HTTPIPService.defaults.prefix(3))
+}
+
+/// Mode of one engine check (see `IPServiceSet`).
+public enum IPFetchMode: Equatable { case cheap, full }
+
+/// Wraps a service with per-service exponential backoff: after a failure (HTTP 429/5xx, other
+/// status, transport error, timeout) the service is not contacted for 60 s, doubling on every
+/// further failure up to 60 min; a success resets it. While backed off `fetch()` throws
+/// `Skipped` at once, so the service is simply absent from the answers (never fabricated).
+public final class BackoffIPService: IPService {
+    public enum Skipped: Error { case backedOff }
+    public static let base: TimeInterval = 60
+    public static let cap: TimeInterval = 3600
+
+    private let inner: IPService
+    private let now: () -> Date
+    private let lock = NSLock()
+    private var delay: TimeInterval = 0
+    private var until: Date?
+
+    /// Wall clock on purpose: after a long sleep the backoff is over (uptime would not advance).
+    public init(_ inner: IPService, now: @escaping () -> Date = Date.init) {
+        self.inner = inner; self.now = now
+    }
+
+    public var name: String { inner.name }
+    /// Current backoff length (0 = none).
+    public var currentDelay: TimeInterval { lock.lock(); defer { lock.unlock() }; return delay }
+
+    public func fetch() async throws -> IPAnswer {
+        lock.lock()
+        let skip = until.map { now() < $0 } ?? false
+        lock.unlock()
+        if skip { throw Skipped.backedOff }
+        do {
+            let a = try await inner.fetch()
+            lock.lock(); delay = 0; until = nil; lock.unlock()
+            return a
+        } catch {
+            lock.lock()
+            delay = delay == 0 ? BackoffIPService.base : min(delay * 2, BackoffIPService.cap)
+            until = now().addingTimeInterval(delay)
+            lock.unlock()
+            throw error
+        }
     }
 }

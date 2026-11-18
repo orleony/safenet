@@ -369,20 +369,25 @@ public final class BackoffIPService: IPService {
     public var currentDelay: TimeInterval { lock.lock(); defer { lock.unlock() }; return delay }
 
     public func fetch() async throws -> IPAnswer {
-        lock.lock()
-        let skip = until.map { now() < $0 } ?? false
-        lock.unlock()
-        if skip { throw Skipped.backedOff }
+        if isBackedOff() { throw Skipped.backedOff }
         do {
             let a = try await inner.fetch()
-            lock.lock(); delay = 0; until = nil; lock.unlock()
+            succeeded()
             return a
         } catch {
-            lock.lock()
-            delay = delay == 0 ? BackoffIPService.base : min(delay * 2, BackoffIPService.cap)
-            until = now().addingTimeInterval(delay)
-            lock.unlock()
+            failed()
             throw error
         }
+    }
+
+    private func isBackedOff() -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        return until.map { now() < $0 } ?? false
+    }
+    private func succeeded() { lock.lock(); delay = 0; until = nil; lock.unlock() }
+    private func failed() {
+        lock.lock(); defer { lock.unlock() }
+        delay = delay == 0 ? BackoffIPService.base : min(delay * 2, BackoffIPService.cap)
+        until = now().addingTimeInterval(delay)
     }
 }

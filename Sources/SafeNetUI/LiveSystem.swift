@@ -35,7 +35,7 @@ public final class LiveSystem {
         configReadOnly = testMode != nil && (env["SAFENET_CONFIG_DIR"] ?? "").isEmpty
         let q = queue
         let freezer = Freezer(table: SystemProcessTable(), signaler: KillSignaler(), journal: paths.journal)
-        let fetch: (@escaping ([IPAnswer]) -> Void) -> Void
+        let fetch: (IPFetchMode, @escaping ([IPAnswer]) -> Void) -> Void
         let probe: ([String], @escaping ([RouteResult]) -> Void) -> Void
         let runner = ProcessCommandRunner()
         var snapshotNow: () -> NetSnapshot = {
@@ -50,7 +50,9 @@ public final class LiveSystem {
             NSLog("SafeNet: TEST MODE (SAFENET_FAKE_IP=%@, offline=%@)",
                   t.fakeAnswer.map { "\($0.ip),\($0.country)" } ?? "-", t.offline ? "yes" : "no")
             let ans = t.fakeAnswer, off = t.offline
-            fetch = { cb in q.async { cb(off || ans == nil ? [] : Array(repeating: ans!, count: 4)) } }
+            fetch = { mode, cb in
+                q.async { cb(off || ans == nil ? [] : Array(repeating: ans!, count: mode == .cheap ? 2 : 4)) }
+            }
             probe = { hosts, cb in
                 q.async {
                     cb(hosts.map { RouteResult(host: $0, ip: ans?.ip, country: ans?.country,
@@ -73,14 +75,22 @@ public final class LiveSystem {
                 }
             }
         } else {
-            // Services are created once and reused (each HTTPIPService owns a URLSession).
-            let services: [IPService] = (HTTPIPService.defaults + [HTTPIPService.ipv6Only]).map { HTTPIPService(spec: $0) }
-            let checker = IPChecker(services: services, timeout: 6)
-            fetch = { cb in Task { let a = await checker.check(); q.async { cb(a) } } }
+            // Services are created once and reused (each owns a URLSession and its backoff state).
+            // Tiered (ruling R1): the periodic tick asks only the cheap ones; the quota-limited
+            // services and the IPv6 one are asked only in the full fan-out.
+            let cheap: [IPService] = [BackoffIPService(TraceIPService()),
+                                      BackoffIPService(HTTPIPService(spec: IPServiceSet.countryIs))]
+            let limited: [IPService] = IPServiceSet.quotaLimitedSpecs.map { BackoffIPService(HTTPIPService(spec: $0)) }
+            let six: IPService = BackoffIPService(HTTPIPService(spec: HTTPIPService.ipv6Only))
+            let cheapChecker = IPChecker(services: cheap, timeout: 6)
+            let fullChecker = IPChecker(services: cheap + limited + [six], timeout: 6)
+            fetch = { mode, cb in
+                Task { let a = await (mode == .cheap ? cheapChecker : fullChecker).check(); q.async { cb(a) } }
+            }
             let rp = RouteProbe()
             probe = { hosts, cb in Task { let r = await rp.check(hosts: hosts); q.async { cb(r) } } }
-            let v4 = IPChecker(services: Array(services.dropLast()), timeout: 6)
-            let v6 = IPChecker(services: [services.last!], timeout: 6)
+            let v4 = IPChecker(services: cheap + limited, timeout: 6)
+            let v6 = IPChecker(services: [six], timeout: 6)
             let snapFn = snapshotNow
             deep = { cb in
                 Task.detached {

@@ -41,6 +41,10 @@ private final class ERig {
     var routeResults: [RouteResult] = []
     var routeCalls = 0
     var fetchCalls = 0
+    /// Mode of every fetch, in order.
+    var modes: [IPFetchMode] = []
+    /// Answers of the cheap services (nil = the same as `answers`).
+    var cheapAnswers: [IPAnswer]?
     /// When set, the next fetch is held until `release()`.
     var holdFetch = false
     var held: (() -> Void)?
@@ -67,9 +71,10 @@ private final class ERig {
     func rebuild() {
         var deps = EngineDeps(
             clock: clock, freezer: freezer, log: EventLog(url: dir.appendingPathComponent("events.jsonl")), store: store,
-            fetchAnswers: { [unowned self] cb in
+            fetchAnswers: { [unowned self] mode, cb in
                 self.fetchCalls += 1
-                let now = self.answers               // answers as seen when the fetch started
+                self.modes.append(mode)
+                let now = mode == .cheap ? (self.cheapAnswers ?? self.answers) : self.answers
                 if self.holdFetch { self.held = { cb(now) } } else { cb(now) }
             },
             probeRoutes: { [unowned self] _, cb in self.routeCalls += 1; cb(self.routeResults) },
@@ -95,6 +100,11 @@ private func cfg(apps: [String] = ["telegram"], countries: [String] = ["NL"]) ->
     c.allow = AllowList(ips: [], countries: countries)
     c.closeTimeout = 0
     return c
+}
+
+/// Tiered-polling tests: route check off so only the IP checks are counted.
+private func tiered(apps: [String] = ["telegram"]) -> Config {
+    var c = cfg(apps: apps, countries: ["RU"]); c.routeCheck = false; return c
 }
 
 func registerEngineTests() {
@@ -424,5 +434,115 @@ func registerEngineTests() {
             expect(!m.contains(home) && !m.contains(user) && !m.contains(r.dir.path) && !m.contains("/"), m)
             expect(!NoticeText.configError(m).body.contains(home))
         }
+    }
+
+    // MARK: Tiered polling (C1, ruling R1)
+
+    test("testEngineTickAsksOnlyCheapServices") {
+        let r = ERig(config: tiered())
+        r.engine.start(watchConfig: false)
+        r.engine.networkChanged(online)
+        expectEqual(r.modes.last, .full, "start / network change: full fan-out")
+        let fulls = r.modes.filter { $0 == .full }.count
+        r.modes = []
+        r.clock.advance(by: 30)
+        expect(!r.modes.isEmpty, "the tick still checks")
+        expectEqual(r.modes.filter { $0 == .full }.count, 0, "unchanged IP: quota-limited services untouched")
+        expect(fulls >= 1)
+        expectEqual(r.engine.status.state, .ok)
+    }
+    test("testEngineCheapUnchangedIPKeepsLastFullCountry") {
+        let r = ERig(config: tiered())
+        r.engine.start(watchConfig: false)
+        r.engine.networkChanged(online)
+        // GeoIP of the cheap services disagrees on the country of the same IP: IP only compared.
+        r.cheapAnswers = [a("5.6.7.8", "NL"), a("5.6.7.8", "NL")]
+        r.modes = []
+        r.clock.advance(by: 5)
+        expectEqual(r.modes, [.cheap])
+        expectEqual(r.engine.status.confirmed, a("5.6.7.8", "RU"), "country from the last full confirmation")
+        expectEqual(r.engine.status.state, .ok)
+    }
+    test("testEngineCheapChangedIPRunsFullFanOut") {
+        let r = ERig(config: tiered())
+        r.engine.start(watchConfig: false)
+        r.engine.networkChanged(online)
+        r.cheapAnswers = [a("9.9.9.9", "NL"), a("9.9.9.9", "NL")]
+        r.answers = [a("9.9.9.9", "NL"), a("9.9.9.9", "NL"), a("9.9.9.9", "NL")]
+        r.modes = []
+        r.clock.advance(by: 5)
+        expectEqual(r.modes, [.cheap, .full])
+        expectEqual(r.engine.status.confirmed, a("9.9.9.9", "NL"), "new IP confirmed only by the full fan-out")
+        expectEqual(r.engine.guardian.frozenApps, ["telegram"], "NL not allowed")
+    }
+    test("testEngineCheapFailureBelowQuorumFailsClosed") {
+        let r = ERig(config: tiered())
+        r.engine.start(watchConfig: false)
+        r.engine.networkChanged(online)
+        expectEqual(r.engine.status.state, .ok)
+        r.cheapAnswers = [a("5.6.7.8", "RU")]        // one cheap service failed: below quorum 2
+        r.answers = []                               // and the full fan-out gets nothing
+        r.modes = []
+        r.clock.advance(by: 5)
+        expectEqual(r.modes, [.cheap, .full])
+        expectEqual(r.engine.guardian.frozenApps, ["telegram"])
+        if case .frozen(_, let reason, _) = r.engine.status.state { expectEqual(reason, .unconfirmed) }
+        else { expect(false, "not frozen: \(r.engine.status.state)") }
+    }
+    test("testEngineNoPeriodicPollingWithoutProtectedApps") {
+        let r = ERig(config: tiered(apps: []))
+        r.engine.start(watchConfig: false)
+        r.engine.networkChanged(online)
+        let n = r.fetchCalls
+        r.clock.advance(by: 3600)
+        expectEqual(r.fetchCalls, n, "no polling at all without protected apps")
+        r.engine.checkNow()
+        expectEqual(r.fetchCalls, n + 1, "manual check still works")
+        expectEqual(r.modes.last, .full)
+        r.engine.toggleApp("telegram")
+        expectEqual(r.modes.last, .full, "first protected app: fresh full check")
+        expectEqual(r.fetchCalls, n + 2)
+    }
+    test("testEngineFullFanOutEveryTenMinutes") {
+        let r = ERig(config: tiered())
+        r.engine.start(watchConfig: false)
+        r.engine.networkChanged(online)
+        r.modes = []
+        r.clock.advance(by: 599)
+        expectEqual(r.modes.filter { $0 == .full }.count, 0)
+        r.clock.advance(by: 6)
+        expectEqual(r.modes.filter { $0 == .full }.count, 1, "10-minute full refresh")
+        r.modes = []
+        r.clock.advance(by: 60)
+        expectEqual(r.modes.filter { $0 == .full }.count, 0)
+    }
+    test("testEngineWakeAndManualCheckAreFull") {
+        let r = ERig(config: tiered())
+        r.engine.start(watchConfig: false)
+        r.engine.networkChanged(online)
+        r.modes = []
+        r.engine.checkNow()
+        expectEqual(r.modes, [.full])
+        r.modes = []
+        r.engine.didWake()
+        expect(!r.modes.isEmpty && r.modes.allSatisfy { $0 == .full }, "\(r.modes)")
+    }
+    test("testCheapConfirmsPureRule") {
+        let full = [a("1.2.3.4", "NL"), a("1.2.3.4", "NL"), a("1.2.3.4", "NL"), a("2001:db8::7", "NL")]
+        expect(Engine.cheapConfirms([a("1.2.3.4", "RU"), a("1.2.3.4", "RU")], last: full, minAgree: 2, cheapCount: 2))
+        expect(!Engine.cheapConfirms([a("1.2.3.4", "NL")], last: full, minAgree: 2, cheapCount: 2), "below quorum")
+        expect(Engine.cheapConfirms([a("1.2.3.4", "NL")], last: full, minAgree: 1, cheapCount: 2))
+        expect(Engine.cheapConfirms([a("1.2.3.4", "NL"), a("1.2.3.4", "NL")], last: full, minAgree: 3, cheapCount: 2),
+               "quorum capped at the number of cheap services")
+        expect(!Engine.cheapConfirms([a("1.2.3.4", "NL"), a("4.4.4.4", "NL")], last: full, minAgree: 1, cheapCount: 2),
+               "any different IP -> full")
+        expect(Engine.cheapConfirms([a("1.2.3.4", "NL"), a("2001:db8::7", "NL")], last: full, minAgree: 2, cheapCount: 2),
+               "dual stack: the known IPv6 exit counts as unchanged")
+        expect(!Engine.cheapConfirms([a("1.2.3.4", "NL"), a("2001:db8::8", "NL")], last: full, minAgree: 2, cheapCount: 2))
+        expect(!Engine.cheapConfirms([a("2001:db8::7", "NL"), a("2001:db8::7", "NL")], last: full, minAgree: 2, cheapCount: 2),
+               "needs the IPv4 one too")
+        expect(!Engine.cheapConfirms([a("1.2.3.4", "NL"), a("1.2.3.4", "NL")], last: [], minAgree: 2, cheapCount: 2),
+               "no previous confirmation")
+        expect(!Engine.cheapConfirms([], last: full, minAgree: 2, cheapCount: 2))
     }
 }

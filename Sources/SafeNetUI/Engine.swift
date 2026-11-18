@@ -29,8 +29,9 @@ public struct EngineDeps {
     public var freezer: Freezer
     public var log: EventLog
     public var store: ConfigStore
-    /// Fetches IP answers; must call back on the engine's queue (tests: synchronously).
-    public var fetchAnswers: (@escaping ([IPAnswer]) -> Void) -> Void
+    /// Fetches IP answers from the services of `mode` (`IPServiceSet`); must call back on the
+    /// engine's queue (tests: synchronously).
+    public var fetchAnswers: (IPFetchMode, @escaping ([IPAnswer]) -> Void) -> Void
     /// Route probes for the given hosts; same callback rule.
     public var probeRoutes: ([String], @escaping ([RouteResult]) -> Void) -> Void
     /// DNS resolvers (scutil); nil = unknown.
@@ -41,13 +42,17 @@ public struct EngineDeps {
     public var queue: DispatchQueue?
     public var tickInterval: TimeInterval = 1
     public var routeInterval: TimeInterval = 120
+    /// Number of cheap services asked by the periodic tick (caps the quorum of that tick).
+    public var cheapServiceCount = 2
+    /// The full fan-out runs at least this often while apps are protected (10 min).
+    public var fullRefreshInterval: TimeInterval = 600
     /// Non-nil: nothing is written to disk (test mode without SAFENET_CONFIG_DIR would otherwise
     /// put the fake IP/country into the user's real config.yaml). Changes still apply in memory;
     /// the message is reported through `onNotice`.
     public var configWritesBlocked: String?
 
     public init(clock: Clock, freezer: Freezer, log: EventLog, store: ConfigStore,
-                fetchAnswers: @escaping (@escaping ([IPAnswer]) -> Void) -> Void,
+                fetchAnswers: @escaping (IPFetchMode, @escaping ([IPAnswer]) -> Void) -> Void,
                 probeRoutes: @escaping ([String], @escaping ([RouteResult]) -> Void) -> Void,
                 resolvers: @escaping () -> [DNSResolver]?, snapshotNow: @escaping () -> NetSnapshot,
                 queue: DispatchQueue?) {
@@ -63,7 +68,11 @@ public struct EngineDeps {
 /// test thread in tests). Timers come from `deps.clock` (in the app a `SystemClock` on that queue).
 ///
 /// Loop: network change / wake -> `Guard.networkChanged()` (instant freeze pending a check) and a
-/// fresh check; poll every `check_interval`; `Guard.tick()` every second (resume retries, catch-up
+/// fresh FULL check; every `check_interval` (only while apps are protected) a CHEAP check (1.1.1.1
+/// trace + api.country.is) that compares the IP only: when enough of them report the last
+/// confirmed IP the last FULL answers (and their country) are kept, anything else (other IP, too
+/// few answers, nothing confirmed yet) runs the full fan-out at once; the full fan-out also runs
+/// every `fullRefreshInterval` (10 min); `Guard.tick()` every second (resume retries, catch-up
 /// freezing); route probes (only the five AI hosts) every 120 s and after a network change, only
 /// while protected apps exist and `route_check` is on. A check whose network changed while it ran
 /// is discarded (its answers may come from the old network).
@@ -88,6 +97,8 @@ public final class Engine {
     private var lastCheck: Date?
     private var checking = false
     private var recheck = false
+    /// Uptime of the last finished FULL fan-out (nil = none yet).
+    private var lastFullAt: TimeInterval?
     private var netGen = 0
     private var probing = false
     private var pollTimer: Cancellable?
@@ -235,29 +246,51 @@ public final class Engine {
         updateRouteSchedule(after: 2)
     }
 
-    /// Starts a check now (coalesced with one in flight).
-    public func checkNow() {
+    /// Starts a FULL check now (all services; coalesced with one in flight). Used at start, on
+    /// network change / wake / end of pause (through the Guard) and by "Проверить сейчас".
+    public func checkNow() { check(.full) }
+
+    private func check(_ mode: IPFetchMode) {
         guard running else { return }
-        if checking { recheck = true; return }
+        if checking { recheck = true; return }      // the follow-up is always a full check
         checking = true
         let snap = snapshot ?? deps.snapshotNow()
         snapshot = snap
         let gen = netGen
-        if !snap.online { finish([], gen); return }
-        deps.fetchAnswers { [weak self] a in self?.finish(a, gen) }
+        if !snap.online { finish([], gen, .full); return }
+        deps.fetchAnswers(mode) { [weak self] a in self?.finish(a, gen, mode) }
     }
 
-    private func finish(_ answers: [IPAnswer], _ gen: Int) {
+    private func finish(_ answers: [IPAnswer], _ gen: Int, _ mode: IPFetchMode) {
         checking = false
         guard running else { return }
         if gen != netGen {                           // network changed meanwhile: stale answers
             recheck = false
-            checkNow()
+            check(.full)
             return
         }
-        lastAnswers = answers
+        if mode == .cheap {
+            guard Engine.cheapConfirms(answers, last: lastAnswers, minAgree: config.minAgree,
+                                       cheapCount: deps.cheapServiceCount) else {
+                check(.full)                         // changed IP, too few answers, nothing confirmed
+                return
+            }
+            // Unchanged IP: keep the last FULL answers (country included) and re-evaluate (DNS,
+            // routes, trusted network may have changed).
+        } else {
+            lastAnswers = answers
+            lastFullAt = deps.clock.uptime
+        }
         evaluateAndApply()
-        if recheck { recheck = false; checkNow() }
+        if recheck { recheck = false; check(.full) }
+    }
+
+    /// Periodic tick: nothing at all without protected apps; a full fan-out when the last one is
+    /// older than `fullRefreshInterval`; else the cheap check.
+    private func pollTick() {
+        guard running, !AppCatalog.appIDs(in: config).isEmpty else { return }
+        let due = lastFullAt.map { deps.clock.uptime - $0 >= deps.fullRefreshInterval } ?? true
+        check(due ? .full : .cheap)
     }
 
     private func evaluateAndApply() {
@@ -365,12 +398,15 @@ public final class Engine {
         guard running else { return }
         let oldInterval = config.checkInterval
         let wasActive = routesActive
+        let hadApps = !AppCatalog.appIDs(in: config).isEmpty
         config = c
         guardian.updateConfig(c)
         if oldInterval != c.checkInterval { schedulePoll() }
         if wasActive != routesActive { updateRouteSchedule(after: 0) }
         onConfig?(c)
         if lastSample != nil { evaluateAndApply() } else { publish() }
+        // First protected app after a time without polling: the last answers may be old.
+        if !hadApps && !AppCatalog.appIDs(in: c).isEmpty { checkNow() }
     }
 
     // MARK: Timers
@@ -379,7 +415,7 @@ public final class Engine {
         pollTimer?.cancel()
         guard running else { return }
         pollTimer = deps.clock.schedule(after: max(1, config.checkInterval)) { [weak self] in
-            self?.checkNow(); self?.schedulePoll()
+            self?.pollTick(); self?.schedulePoll()
         }
     }
 
@@ -408,7 +444,11 @@ public final class Engine {
             guard let self = self else { return }
             self.probing = false
             guard self.running, self.routesActive else { self.routes = nil; return }
-            if gen == self.netGen { self.routes = r; self.checkNow() }
+            if gen == self.netGen {
+                self.routes = r
+                // Re-evaluate with the new route data; no IP fan-out just for a probe (quotas).
+                if self.lastSample != nil && !self.checking { self.evaluateAndApply() } else { self.checkNow() }
+            }
             self.updateRouteSchedule(after: gen == self.netGen ? self.deps.routeInterval : 0)
         }
     }
@@ -442,6 +482,28 @@ public final class Engine {
     static func quorumAnswers(_ a: [IPAnswer]) -> [IPAnswer] {
         let v4 = a.filter { !$0.ip.contains(":") }
         return v4.isEmpty ? a : v4
+    }
+
+    /// Cheap periodic check (IP only; GeoIP countries differ between services): true when the
+    /// last FULL answers confirm an IP, every IPv4 cheap answer equals it, every IPv6 cheap
+    /// answer equals an IPv6 address the full check saw (same exit over IPv6), and at least
+    /// `min(min_agree, cheapCount)` cheap answers match (at least one of them the IPv4 one).
+    /// Never confirms a NEW IP: anything else returns false and the full fan-out decides.
+    static func cheapConfirms(_ cheap: [IPAnswer], last: [IPAnswer], minAgree: Int, cheapCount: Int) -> Bool {
+        guard let conf = confirmed(quorumAnswers(last), minAgree: minAgree) else { return false }
+        let known6 = Set(last.filter { $0.ip.contains(":") }.map { $0.ip })
+        var v4 = 0, v6 = 0
+        for a in cheap {
+            if a.ip.contains(":") && a.ip != conf.ip {
+                guard known6.contains(a.ip) else { return false }
+                v6 += 1
+            } else {
+                guard a.ip == conf.ip else { return false }
+                v4 += 1
+            }
+        }
+        let need = min(max(1, minAgree), max(1, cheapCount))
+        return v4 >= 1 && v4 + v6 >= need
     }
 
     static func confirmed(_ a: [IPAnswer], minAgree: Int) -> IPAnswer? {

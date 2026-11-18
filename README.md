@@ -19,6 +19,18 @@ scripts/verify-app.sh           # automated end-to-end check of dist/SafeNet.app
 
 `dist/` is a build artefact and is not committed. Verification record: `docs/verification.md`.
 
+## Network use and rate limits
+
+Only IP-lookup services and `/cdn-cgi/trace` of five AI hosts are contacted (no telemetry).
+IP polling is tiered so free quotas last: the periodic tick (`check_interval`, default 5 s,
+only while apps are protected) asks the high-limit services `https://1.1.1.1/cdn-cgi/trace`
+(Cloudflare) and `api.country.is` and compares the IP only; the full fan-out (those two plus
+ipinfo.io, ipapi.co, ifconfig.co and the IPv6-only v6.ident.me) runs at start, on network
+change, on wake, on a manual check, every 10 minutes, and whenever the tick sees another IP or
+too few answers. A new IP is never confirmed on fewer than `min_agree` answers. A service that
+fails (HTTP 429/5xx, transport error) is skipped for 60 s, doubling up to 60 min, reset on
+success; skipped services are simply missing from the answers.
+
 ## The `safenet` command
 
 The app binary doubles as the console client: `SafeNet.app/Contents/MacOS/SafeNetApp status`.

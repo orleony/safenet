@@ -29,6 +29,8 @@ public final class LiveSystem {
     private var ipc: IPCServer?
     /// Held for the whole life of the app (released by the kernel at exit).
     private let instanceLock: InstanceLock
+    /// Shown once the window is up (the lock file could not be opened).
+    private let lockProblem: String?
 
     public init(environment env: [String: String] = ProcessInfo.processInfo.environment) {
         paths = AppPaths.from(environment: env)
@@ -36,7 +38,15 @@ public final class LiveSystem {
         // Single instance, before the Freezer touches the journal. Busy = another SafeNet runs, or
         // the watchdog of a just-quit one is still resuming its apps (up to ~10 s): wait for it.
         instanceLock = InstanceLock(url: InstanceLock.path(forJournal: paths.journal))
-        if !instanceLock.acquire(timeout: 12) { LiveSystem.refuseSecondInstance() }
+        switch instanceLock.acquire(timeout: InstanceLock.appWait) {
+        case .acquired: lockProblem = nil
+        case .busy: LiveSystem.refuseSecondInstance()
+        case .unavailable(let e):
+            // Not "already running": the lock file cannot be opened (support dir unwritable?).
+            // Fail safe: protection still starts (as before the lock existed); the user is told.
+            NSLog("SafeNet: safenet.lock unavailable (errno %d); single-instance check skipped", e)
+            lockProblem = "Не удалось открыть safenet.lock (ошибка \(e)): проверка «второй экземпляр» отключена. Не запускайте SafeNet дважды."
+        }
         testMode = TestMode.from(environment: env)
         configReadOnly = testMode != nil && (env["SAFENET_CONFIG_DIR"] ?? "").isEmpty
         let q = queue
@@ -158,6 +168,7 @@ public final class LiveSystem {
         engine.onConfigError = { [weak self] e in DispatchQueue.main.async { self?.onConfigError?(e) } }
         engine.onNotice = { [weak self] e in DispatchQueue.main.async { self?.onNotice?(e) } }
         engine.onConfigHealthy = { [weak self] in DispatchQueue.main.async { self?.onConfigHealthy?() } }
+        if let m = lockProblem { DispatchQueue.main.async { [weak self] in self?.onNotice?(m) } }
         queue.async { [weak self] in
             guard let self = self else { return }
             self.engine.start()

@@ -602,7 +602,7 @@ func registerProcsTests() {
         expect(a.isHeld)
         expect(!b.tryAcquire(), "second is busy")
         var slept = 0.0
-        expect(!b.acquire(timeout: 1, poll: 0.25, sleep: { slept += $0 }), "waits, then gives up")
+        expectEqual(b.acquire(timeout: 1, poll: 0.25, sleep: { slept += $0 }), .busy, "waits, then gives up")
         expect(slept >= 1 && slept < 1.6, "waited about the timeout: \(slept)")
         a.release()
         expect(!a.isHeld)

@@ -287,7 +287,9 @@ public final class Freezer {
         let lock = InstanceLock(url: InstanceLock.path(forJournal: journal))
         watchdog(journal: journal, table: SystemProcessTable(), signaler: KillSignaler(),
                  selfPID: getpid(), myUID: getuid(), isParentAlive: alive, wait: wait,
-                 acquireLock: { lock.acquire(timeout: 1) })   // the dead parent's lock is freed at exit
+                 // busy = a relaunched app owns the journal: yield. Unavailable (cannot open the lock
+                 // file) = nobody can own it: fail safe, resume as before the lock existed.
+                 acquireLock: { lock.acquire(timeout: 1) != .busy })
         lock.release()
         if kq >= 0 { Darwin.close(kq) }
     }

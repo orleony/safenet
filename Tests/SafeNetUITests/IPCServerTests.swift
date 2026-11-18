@@ -101,7 +101,7 @@ func registerIPCServerTests() {
         expect(resp.text.contains("страна не разрешена"), resp.text)
         expect(resp.text.contains("1.2.3.4 (RU)"), resp.text)
         expect(resp.text.contains("VPN-туннель: да"), resp.text)
-        expect(resp.text.contains("Telegram: заморожено") || resp.text.contains("Telegram: под защитой"), resp.text)
+        expect(resp.text.contains("Telegram: не запущено"), "nothing of Telegram runs in the fake table: \(resp.text)")
         expect(resp.text.contains("ТЕСТОВЫЙ РЕЖИМ"), resp.text)
         expect(resp.text.contains(r.paths.config.path), "config path")
         expect(!resp.text.contains("allow"), "no config content")

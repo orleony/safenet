@@ -770,4 +770,39 @@ private final class JitterClock: Clock {
     var now: Date { n += 1; return base.now.addingTimeInterval(n * 0.000_003) }
     var uptime: TimeInterval { base.uptime }
     func schedule(after: TimeInterval, _ f: @escaping () -> Void) -> Cancellable { base.schedule(after: after, f) }
+
+}
+
+func registerGuardC2Tests() {
+    // MARK: C2: system (protected-only) apps are never reported frozen
+
+    test("testProtectedOnlyMatchIsNotReportedFrozen") {
+        var c = baseConfig()
+        c.apps = []
+        c.customApps = [CustomApp(name: "Notes", match: "Notes")]
+        let notes = ProcInfo(pid: 300, ppid: 1, name: "Notes", path: "/System/Applications/Notes.app/Contents/MacOS/Notes",
+                             args: "/System/Applications/Notes.app/Contents/MacOS/Notes",
+                             startTime: Date(timeIntervalSince1970: 1000), uid: me)
+        let r = Rig(c, procs: [notes])
+        let g = r.guardian
+        let id = AppCatalog.appIDs(in: c)[0]
+        g.apply(bad)
+        expectEqual(g.frozenApps, [], "a running system app is never 'frozen'")
+        expectEqual(g.unprotectableApps, [id])
+        expect(g.freezeFailedApps.contains(id), "it runs unrestricted")
+        expectEqual(reason(g.state), .freezeFailed)
+        expectEqual(r.sig.pids(SIGSTOP), [], "protected processes are never signalled")
+        r.clock.advance(by: 25)                       // timeout: closing still skips it
+        expectEqual(r.sig.pids(SIGTERM), [])
+        expectEqual(r.sig.pids(SIGKILL), [])
+        expect(r.log.recent(limit: 100).contains { $0.kind == .leak && $0.detail == "unprotectable" }, "logged")
+    }
+    test("testNotRunningFrozenAppIsReportedNotRunning") {
+        let r = Rig(procs: [gproc(100, "Claude")])     // Telegram not running
+        let g = r.guardian
+        g.apply(bad)
+        expectEqual(g.notRunningApps, ["telegram"])
+        expectEqual(g.unprotectableApps, [])
+        expect(!g.notRunningApps.contains("claude"))
+    }
 }

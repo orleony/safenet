@@ -77,9 +77,12 @@ struct AppsTab: View {
     }
 }
 
-/// App state badge: ЗАМОРОЖЕНО / НЕ ЗАМОРОЖЕНО / ОТПУЩЕНО / ЗАКРЫТО (only apps that were closed).
+/// App state badge: СИСТЕМНОЕ — НЕ ЗАЩИЩАЕТСЯ / НЕ ЗАМОРОЖЕНО / НЕ ЗАПУЩЕНО / ЗАМОРОЖЕНО / ЗАКРЫТО
+/// (only apps that were closed) / ОТПУЩЕНО.
 func appBadge(_ id: String, _ s: EngineStatus, _ p: Palette) -> (String, RGB)? {
+    if s.unprotectableApps.contains(id) { return ("СИСТЕМНОЕ — НЕ ЗАЩИЩАЕТСЯ", p.danger) }
     if s.freezeFailedApps.contains(id) { return ("НЕ ЗАМОРОЖЕНО", p.danger) }
+    if s.notRunningApps.contains(id) { return ("НЕ ЗАПУЩЕНО", p.muted) }
     if s.frozenApps.contains(id) { return ("ЗАМОРОЖЕНО", p.frozen) }
     if s.closedApps.contains(id) { return ("ЗАКРЫТО", p.danger) }
     if s.releasedApps.contains(id) { return ("ОТПУЩЕНО", p.muted) }

@@ -222,4 +222,19 @@ func registerPanelModelTests() {
         expectEqual(rows.first { $0.id == "svc-2" }?.level, .warn, "same confirmed IP, other GeoIP country")
         expectEqual(rows.first { $0.id == "svc-3" }?.level, .fail, "a different IP stays a failure")
     }
+
+    test("testCustomAppWarnsForSystemOnlyRule") {
+        let base = Config.default
+        let sys: (String) -> Bool = { $0 == "/System/Applications/Notes.app" }
+        let r = CustomAppInput.check(name: "Заметки", match: "Notes", config: base, editing: nil, fileExists: sys)
+        expect(r.errors.isEmpty, "\(r)")
+        expect(r.warnings.contains(CustomAppInput.systemOnlyText), "\(r)")
+        let p = CustomAppInput.check(name: "TE", match: "/System/Applications/TextEdit.app", config: base, editing: nil, fileExists: { _ in false })
+        expect(p.warnings.contains(CustomAppInput.systemOnlyText), "\(p)")
+        let both: (String) -> Bool = { $0 == "/System/Applications/Notes.app" || $0 == "/Applications/Notes.app" }
+        expect(!CustomAppInput.check(name: "N", match: "Notes", config: base, editing: nil, fileExists: both).warnings
+            .contains(CustomAppInput.systemOnlyText), "a user-installed copy can be protected")
+        expect(!CustomAppInput.check(name: "T", match: "Telegram", config: base, editing: nil, fileExists: { _ in false }).warnings
+            .contains(CustomAppInput.systemOnlyText))
+    }
 }

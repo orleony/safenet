@@ -7,6 +7,10 @@ public struct EngineStatus: Equatable {
     public var frozenApps: Set<String> = []
     public var releasedApps: Set<String> = []
     public var freezeFailedApps: Set<String> = []
+    /// Apps matching only protected system processes (running unrestricted; subset of freezeFailedApps).
+    public var unprotectableApps: Set<String> = []
+    /// Apps that should be frozen but have no running process («не запущено»).
+    public var notRunningApps: Set<String> = []
     /// Apps actually closed (not every app when the overall state is `.closed`).
     public var closedApps: Set<String> = []
     /// Answers of the last finished check (all services, IPv4 and IPv6).
@@ -461,6 +465,8 @@ public final class Engine {
         s.frozenApps = guardian.frozenApps
         s.releasedApps = guardian.releasedApps
         s.freezeFailedApps = guardian.freezeFailedApps
+        s.unprotectableApps = guardian.unprotectableApps
+        s.notRunningApps = guardian.notRunningApps
         s.closedApps = guardian.closedApps
         s.answers = lastAnswers
         s.confirmed = Engine.confirmed(Engine.quorumAnswers(lastAnswers), minAgree: config.minAgree)

@@ -49,7 +49,9 @@ public enum CLIStatusText {
     }
 
     static func appState(_ id: String, _ s: EngineStatus) -> String {
+        if s.unprotectableApps.contains(id) { return "системное приложение — не защищается" }
         if s.freezeFailedApps.contains(id) { return "не удалось заморозить" }
+        if s.notRunningApps.contains(id) { return "не запущено" }
         if s.frozenApps.contains(id) { return "заморожено" }
         if s.closedApps.contains(id) { return "закрыто" }
         if s.releasedApps.contains(id) { return "освобождено до следующей проверки" }

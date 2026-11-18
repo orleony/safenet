@@ -61,6 +61,11 @@ public final class Guard {
         var procs: [Int32: ProcInfo] = [:]
         /// Should be frozen, but matching processes are running unstopped.
         var freezeFailed = false
+        /// Only protected (system) processes match and they run: the app cannot be protected at
+        /// all (implies `freezeFailed`; never closed, never reported as frozen).
+        var systemOnly = false
+        /// Frozen phase, but nothing of the app runs (UI: «не запущено»).
+        var notRunning = false
         /// A `frozen` event was logged for this freeze episode (only once processes were stopped).
         var loggedFrozen = false
     }
@@ -89,6 +94,7 @@ public final class Guard {
     private var publishedState: GuardState = .ok
     private var publishedFrozen: Set<String> = []
     private var publishedFailed: Set<String> = []
+    private var publishedNotRunning: Set<String> = []
     private var effects: [() -> Void] = []
 
     private var _onChange: ((GuardState) -> Void)?
@@ -131,6 +137,14 @@ public final class Guard {
     public var frozenApps: Set<String> { locked { frozenSet() } }
     /// Apps that should be frozen but whose running processes could not be stopped.
     public var freezeFailedApps: Set<String> { locked { failedSet() } }
+    /// Apps whose only running processes are protected system processes (e.g. a rule matching
+    /// /System/Applications/Notes.app): they run unrestricted and are never reported frozen.
+    /// Always a subset of `freezeFailedApps`.
+    public var unprotectableApps: Set<String> {
+        locked { Set(apps.filter { $0.value.phase == .frozen && $0.value.systemOnly }.keys) }
+    }
+    /// Apps in the frozen phase with no running process at all (nothing to freeze).
+    public var notRunningApps: Set<String> { locked { notRunningSet() } }
     /// Apps released by `on_timeout: resume`; protected again after the next passing check.
     /// Apps closed (timeout or "close now") that have not passed a check since.
     public var closedApps: Set<String> { locked { Set(apps.filter { $0.value.phase == .closed }.keys) } }
@@ -340,7 +354,10 @@ public final class Guard {
             let loose = live.filter { p in
                 !stopped.contains(p.pid) && closing[p.pid].map { !Freezer.same(p.startTime, $0) } ?? true
             }
-            updateFreezeFailed(id, running: !loose.isEmpty)
+            let mine = apps[id]?.procs.isEmpty ?? true
+            let sys = live.isEmpty && mine ? !freezer.protectedMatchingProcesses(ms).isEmpty : false
+            apps[id]?.notRunning = live.isEmpty && mine && !sys
+            updateFreezeFailed(id, running: !loose.isEmpty || sys, systemOnly: sys)
         }
         pruneClosing()
     }
@@ -354,14 +371,19 @@ public final class Guard {
         closing = closing.filter { pid, start in alive[pid].map { Freezer.same($0, start) } ?? false }
     }
 
-    private func updateFreezeFailed(_ id: String, running: Bool) {
+    private func updateFreezeFailed(_ id: String, running: Bool, systemOnly: Bool) {
         guard var a = apps[id] else { return }
         if running {
             if a.phase == .closed { reopen(&a, id) }           // relaunched but cannot be stopped
-            if !a.freezeFailed { record(.leak, id, "freezeFailed") }
+            if !a.freezeFailed || a.systemOnly != systemOnly {
+                record(.leak, id, systemOnly ? "unprotectable" : "freezeFailed")
+            }
             a.freezeFailed = true
+            a.systemOnly = systemOnly
+            a.notRunning = false
         } else {
             a.freezeFailed = false
+            a.systemOnly = false
         }
         apps[id] = a
     }
@@ -434,6 +456,12 @@ public final class Guard {
     /// never-freeze list.
     private func closeApp(_ id: String, _ now: Date, _ detail: String) {
         guard var a = apps[id] else { return }
+        if a.systemOnly {
+            // Only protected processes: nothing may be closed. Stays reported, no new countdown.
+            a.deadline = nil; a.timedOut = true
+            apps[id] = a
+            return
+        }
         var targets = a.procs
         for p in freezer.matchingProcesses(AppCatalog.matchers(for: id, in: config)) where targets[p.pid] == nil {
             targets[p.pid] = p
@@ -490,6 +518,9 @@ public final class Guard {
     }
     private func failedSet() -> Set<String> {
         Set(apps.filter { $0.value.phase == .frozen && $0.value.freezeFailed }.keys)
+    }
+    private func notRunningSet() -> Set<String> {
+        Set(apps.filter { $0.value.phase == .frozen && $0.value.notRunning && !$0.value.freezeFailed }.keys)
     }
 
     private func computeState() -> GuardState {
@@ -553,9 +584,9 @@ public final class Guard {
         lock.lock()
         body()
         rearmDeadlineTimer()
-        let s = computeState(), f = frozenSet(), x = failedSet()
-        if s != publishedState || f != publishedFrozen || x != publishedFailed {
-            publishedState = s; publishedFrozen = f; publishedFailed = x
+        let s = computeState(), f = frozenSet(), x = failedSet(), n = notRunningSet()
+        if s != publishedState || f != publishedFrozen || x != publishedFailed || n != publishedNotRunning {
+            publishedState = s; publishedFrozen = f; publishedFailed = x; publishedNotRunning = n
             let cb = _onChange
             effects.append { cb?(s) }
         }

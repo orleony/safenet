@@ -157,6 +157,20 @@ public final class Freezer {
         return out.sorted { $0.pid < $1.pid }
     }
 
+    /// Running processes of these apps that SafeNet must never signal although they belong to
+    /// this user (system paths such as /System/Applications, deny-listed names). An app that
+    /// matches only such processes cannot be protected: the Guard reports it, never as frozen.
+    public func protectedMatchingProcesses(_ matchers: [AppMatcher]) -> [ProcInfo] {
+        guard !matchers.isEmpty else { return [] }
+        let all = table.list()
+        var seen = Set<Int32>(), out: [ProcInfo] = []
+        for m in matchers {
+            for p in m.select(from: all) where p.pid > 1 && p.pid != selfPID && p.uid == myUID && protected(p)
+                && seen.insert(p.pid).inserted { out.append(p) }
+        }
+        return out.sorted { $0.pid < $1.pid }
+    }
+
     /// Sends SIGCONT to every journaled process whose identity (pid + start time + uid) still
     /// matches. An entry leaves the journal only when SIGCONT succeeded or the process is
     /// verifiably gone / replaced; everything else stays journaled for the next retry

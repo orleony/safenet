@@ -68,7 +68,8 @@ public enum CustomAppInput {
     static let broadArgs: Set<String> = ["http", "https", "node", "python", "python3", ".js", ".py", "/users/", "--type"]
 
     /// Errors refuse saving; warnings are shown but the rule can be saved.
-    public static func check(name: String, match: String, config: Config, editing: String?) -> Report {
+    public static func check(name: String, match: String, config: Config, editing: String?,
+                             fileExists: (String) -> Bool = { FileManager.default.fileExists(atPath: $0) }) -> Report {
         var r = Report()
         let n = name.trimmingCharacters(in: .whitespacesAndNewlines)
         if n.isEmpty { r.errors.append("Введите название") }
@@ -81,7 +82,33 @@ public enum CustomAppInput {
             if let e = partError(p) { r.errors.append(parts.count > 1 ? "Условие «\(p.trimmingCharacters(in: .whitespaces))»: \(e)" : e) }
         }
         if r.errors.isEmpty, parts.count == 1, let w = broadWarning(match) { r.warnings.append(w) }
+        if r.errors.isEmpty, let w = systemOnlyWarning(parts, fileExists: fileExists) { r.warnings.append(w) }
         return r
+    }
+
+    static let systemOnlyText = "Похоже, это системное приложение (из /System): macOS не даёт его замораживать и закрывать — SafeNet покажет его как «не защищается», а работать оно будет без ограничений. Для проверки используйте приложение из папки «Программы»."
+
+    /// The rule can only find protected system processes: a path rule under a never-freeze
+    /// prefix (/System/, /usr/libexec/, …), or a plain name that exists only as a /System app
+    /// (e.g. "Notes", "TextEdit") and not in /Applications or ~/Applications.
+    static func systemOnlyWarning(_ parts: [String], fileExists: (String) -> Bool) -> String? {
+        for part in parts {
+            let (kind, text) = content(part)
+            if kind == "path" {
+                let l = text.lowercased()
+                if neverFreezePathPrefixes.contains(where: { l.hasPrefix($0) || l.hasPrefix(String($0.dropLast())) }) {
+                    return systemOnlyText
+                }
+            }
+            if kind == "name" {
+                let n = text.hasSuffix(".app") ? String(text.dropLast(4)) : text
+                let system = ["/System/Applications/\(n).app", "/System/Applications/Utilities/\(n).app",
+                              "/System/Library/CoreServices/\(n).app"]
+                let user = ["/Applications/\(n).app", NSHomeDirectory() + "/Applications/\(n).app"]
+                if system.contains(where: fileExists) && !user.contains(where: fileExists) { return systemOnlyText }
+            }
+        }
+        return nil
     }
 
     private static func content(_ part: String) -> (kind: String, text: String) {
@@ -228,6 +255,7 @@ public enum EventText {
         case (.paused, "timeoutResume"): return who + "разморожено по истечении срока (настройка «Разморозить»)"
         case (.paused, _): return who + "пауза"
         case (.leak, "freezeFailed"): return who + "не удалось заморозить"
+        case (.leak, "unprotectable"): return who + "системное приложение — не защищается (работает без ограничений)"
         case (.leak, _):
             if let w = why { return who + w.prefix(1).uppercased() + String(w.dropFirst()) }
             return who + "Утечка"

@@ -109,7 +109,9 @@ struct AppRow: View {
     private var badge: (String, RGB)? {
         let p = theme.palette, s = model.status
         guard AppCatalog.appIDs(in: model.config).contains(id) else { return nil }
+        if s.unprotectableApps.contains(id) { return ("СИСТЕМНОЕ — НЕ ЗАЩИЩАЕТСЯ", p.danger) }
         if s.freezeFailedApps.contains(id) { return ("НЕ ЗАМОРОЖЕНО", p.danger) }
+        if s.notRunningApps.contains(id) { return ("НЕ ЗАПУЩЕНО", p.muted) }
         if s.frozenApps.contains(id) { return ("ЗАМОРОЖЕНО", p.frozen) }
         if s.releasedApps.contains(id) { return ("ОТПУЩЕНО", p.muted) }
         if s.closedApps.contains(id) { return ("ЗАКРЫТО", p.danger) }

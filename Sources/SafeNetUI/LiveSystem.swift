@@ -140,7 +140,7 @@ public final class LiveSystem {
         let service = CLIService(
             perform: { [weak self] body in self?.perform(body) }, paths: paths, testMode: testMode,
             configReadOnly: configReadOnly,
-            openPanel: { done in DispatchQueue.main.async { done(PanelOpener.openFromCLI()) } },
+            openPanel: { done in DispatchQueue.main.async { PanelOpener.openFromCLI(done: done) } },
             version: AppState.version)
         let path = paths.socketPath
         let server = IPCServer(path: path, strictDirectory: path != paths.dir.appendingPathComponent("safenet.sock").path,

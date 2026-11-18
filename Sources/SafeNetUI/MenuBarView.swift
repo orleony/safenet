@@ -15,6 +15,7 @@ public struct MenuBarView: View {
         let p = theme.palette
         VStack(alignment: .leading, spacing: theme.spacing) {
             header
+                .onAppear { PanelOpener.register(openWindow) }
             ipBlock
             notices
             Hairline()

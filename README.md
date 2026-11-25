@@ -68,7 +68,8 @@ sudo ln -s /Applications/SafeNet.app/Contents/Resources/safenet /usr/local/bin/s
 
 Then, in a new terminal: `safenet status`.
 
-Commands: `status`, `allow [IP | subnet | country]`, `panel`, `config`, `version`.
+Commands: `status`, `allow [IP | subnet | country]`, `pause [90s | 15m | 2h | restart]`, `resume`,
+`close` (closes the frozen apps now), `panel`, `config`, `version`.
 
 The menu can pause protection for a fixed time or until SafeNet restarts.
 

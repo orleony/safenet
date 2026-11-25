@@ -90,6 +90,11 @@ SafeNet.app (лучше из папки «Программы»; если пот�
   safenet allow             разрешить текущий IP
   safenet allow 1.2.3.4     разрешить IP; можно подсеть: 185.12.40.0/24
   safenet allow NL          разрешить страну
+  safenet pause             пауза защиты на время по умолчанию
+  safenet pause 30m         пауза на 30 минут (можно 90s, 2h; не больше 24 ч)
+  safenet pause restart     пауза до перезапуска SafeNet
+  safenet resume            вернуть защиту после паузы
+  safenet close             закрыть сейчас все замороженные приложения
   safenet panel             открыть панель
   safenet config            где лежит файл настроек
   safenet version           версия

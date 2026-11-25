@@ -112,7 +112,12 @@ done
 if plutil -p "$PL" | grep -q 'UsageDescription'; then fail "no usage-description keys"; else pass "no usage-description keys"; fi
 check "AppIcon.icns present" test -s "$APP/Contents/Resources/AppIcon.icns"
 check "CLI wrapper executable" test -x "$CLI"
-if xattr -r "$APP" 2>/dev/null | grep -q .; then fail "no extended attributes in bundle"; else pass "no extended attributes in bundle"; fi
+# macOS and file providers can attach provenance metadata to a valid signed bundle.
+if xattr -r "$APP" 2>/dev/null | grep -Eq '(^|: )com\.apple\.quarantine$'; then
+    fail "no quarantine attribute in bundle"
+else
+    pass "no quarantine attribute in bundle"
+fi
 
 echo "== runtime checks (test mode, temp config dir)"
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/snverify.XXXXXX")" || { echo "verify-app: mktemp failed"; exit 2; }
@@ -121,7 +126,6 @@ TMP="$(cd -P -- "$TMP" && pwd -P)" || exit 2
 tmp_ok "$TMP" || { echo "verify-app: unsafe temp dir '$TMP'"; exit 2; }
 CFG="$TMP/cfg"; mkdir -p "$CFG"
 SLEEPER="$TMP/snsleeper"
-cp /bin/sleep "$SLEEPER"
 APP_PID=""; SLEEP_PID=""
 export SAFENET_CONFIG_DIR="$CFG"
 export SAFENET_FAKE_IP="1.2.3.4,RU"
@@ -137,6 +141,12 @@ cleanup() {
 }
 trap 'cleanup; [ $FAILS = 0 ] || exit 1' EXIT
 trap 'exit 130' INT TERM
+
+# A relocated Apple platform binary can be killed on launch on current macOS.
+if ! cp /bin/sleep "$SLEEPER" || ! codesign --force --sign - "$SLEEPER" >/dev/null 2>&1; then
+    fail "prepare locally signed sleeper"
+    exit 1
+fi
 
 # Reap the app after it was asked to exit: never block on a process that refused to die.
 reap_app() {
@@ -177,7 +187,11 @@ write_config "NL"
 "$SLEEPER" 3600 &
 SLEEP_PID=$!
 sleep 0.3
-is_running && pass "sleeper started (pid $SLEEP_PID)" || fail "sleeper started"
+if ! is_running; then
+    fail "sleeper started"
+    exit 1
+fi
+pass "sleeper started (pid $SLEEP_PID)"
 
 # 1. Launch from the bundle: frozen, watchdog child, journal, events, socket.
 start_app

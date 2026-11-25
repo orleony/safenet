@@ -47,6 +47,7 @@ public struct Config: Equatable {
     public var closeTimeout: TimeInterval
     public var checkInterval: TimeInterval
     public var minAgree: Int
+    public var ipServices = IPServiceSet.ipv4Hosts
     public var onTimeout: TimeoutAction
     public var blockWhenOffline: Bool
     public var checkIPv6: Bool
@@ -118,6 +119,7 @@ public struct Config: Equatable {
         if let v = yaml["close_timeout"] { c.closeTimeout = try Config.duration(v, "close_timeout") }
         if let v = yaml["check_interval"] { c.checkInterval = try Config.duration(v, "check_interval") }
         if let v = yaml["min_agree"] { c.minAgree = try Config.int(v, "min_agree") }
+        if let v = yaml["ip_services"] { c.ipServices = try Config.strings(v, "ip_services") }
         if let v = yaml["on_timeout"] { c.onTimeout = try Config.enumValue(v, "on_timeout") }
         if let v = yaml["block_when_offline"] { c.blockWhenOffline = try Config.bool(v, "block_when_offline") }
         if let v = yaml["check_ipv6"] { c.checkIPv6 = try Config.bool(v, "check_ipv6") }
@@ -154,6 +156,10 @@ public struct Config: Equatable {
         guard pauseDefault > 0 else { throw ConfigError("pause_default must be > 0") }
         guard timezone == "system" || TimeZone(identifier: timezone) != nil else { throw ConfigError("timezone must be \"system\" or a time zone id like Europe/Moscow") }
         guard minAgree >= 1 else { throw ConfigError("min_agree must be >= 1") }
+        let hosts = Set(ipServices)
+        guard !hosts.isEmpty, hosts.count == ipServices.count, hosts.isSubset(of: Set(IPServiceSet.ipv4Hosts)) else {
+            throw ConfigError("ip_services must contain unique names from the built-in IPv4 services")
+        }
         for (k, g) in appGrace where !(g > 0) || !g.isFinite { throw ConfigError("app_grace.\(k) must be > 0") }
     }
 
@@ -193,6 +199,7 @@ public struct Config: Equatable {
             YAMLEntry("close_timeout", Config.fmt(closeTimeout)),
             YAMLEntry("check_interval", Config.fmt(checkInterval)),
             YAMLEntry("min_agree", .number(Double(minAgree))),
+            YAMLEntry("ip_services", list(ipServices)),
             YAMLEntry("on_timeout", .string(onTimeout.rawValue)),
             YAMLEntry("block_when_offline", .bool(blockWhenOffline)),
             YAMLEntry("check_ipv6", .bool(checkIPv6)),

@@ -17,6 +17,7 @@ public struct EngineStatus: Equatable {
     public var answers: [IPAnswer] = []
     /// The single IP + country confirmed by >= min_agree services, else nil.
     public var confirmed: IPAnswer?
+    public var sharedCountry: String?
     public var snapshot: NetSnapshot?
     public var observation: Observation?
     /// DNS resolvers unreadable while a tunnel is up (warning only under dns_check: warn).
@@ -35,7 +36,7 @@ public struct EngineDeps {
     public var store: ConfigStore
     /// Fetches IP answers from the services of `mode` (`IPServiceSet`); must call back on the
     /// engine's queue (tests: synchronously).
-    public var fetchAnswers: (IPFetchMode, @escaping ([IPAnswer]) -> Void) -> Void
+    public var fetchAnswers: (IPFetchMode, [String], @escaping ([IPAnswer]) -> Void) -> Void
     /// Route probes for the given hosts; same callback rule.
     public var probeRoutes: ([String], @escaping ([RouteResult]) -> Void) -> Void
     /// DNS resolvers (scutil); nil = unknown.
@@ -45,9 +46,7 @@ public struct EngineDeps {
     /// Queue for Guard callbacks and config hot reload; nil = synchronous (tests).
     public var queue: DispatchQueue?
     public var tickInterval: TimeInterval = 1
-    public var routeInterval: TimeInterval = 120
-    /// Number of cheap services asked by the periodic tick (caps the quorum of that tick).
-    public var cheapServiceCount = 2
+    public var routeInterval: TimeInterval = 15
     /// The full fan-out runs at least this often while apps are protected (10 min).
     public var fullRefreshInterval: TimeInterval = 600
     /// Clears every IP service's rate-limit backoff. Called on network change, wake and the manual
@@ -60,7 +59,7 @@ public struct EngineDeps {
     public var configWritesBlocked: String?
 
     public init(clock: Clock, freezer: Freezer, log: EventLog, store: ConfigStore,
-                fetchAnswers: @escaping (IPFetchMode, @escaping ([IPAnswer]) -> Void) -> Void,
+                fetchAnswers: @escaping (IPFetchMode, [String], @escaping ([IPAnswer]) -> Void) -> Void,
                 probeRoutes: @escaping ([String], @escaping ([RouteResult]) -> Void) -> Void,
                 resolvers: @escaping () -> [DNSResolver]?, snapshotNow: @escaping () -> NetSnapshot,
                 queue: DispatchQueue?) {
@@ -81,7 +80,7 @@ public struct EngineDeps {
 /// confirmed IP the last FULL answers (and their country) are kept, anything else (other IP, too
 /// few answers, nothing confirmed yet) runs the full fan-out at once; the full fan-out also runs
 /// every `fullRefreshInterval` (10 min); `Guard.tick()` every second (resume retries, catch-up
-/// freezing); route probes (only the five AI hosts) every 120 s and after a network change, only
+/// freezing); route probes (only the five AI hosts) every 15 s and after a network change, only
 /// while protected apps exist and `route_check` is on. A check whose network changed while it ran
 /// is discarded (its answers may come from the old network).
 public final class Engine {
@@ -100,6 +99,7 @@ public final class Engine {
     private let deps: EngineDeps
     private var snapshot: NetSnapshot?
     private var routes: [RouteResult]?
+    private var freshRoutesPending = false
     private var lastSample: NetworkSampler.Sample?
     private var lastAnswers: [IPAnswer] = []
     private var lastCheck: Date?
@@ -242,6 +242,8 @@ public final class Engine {
         guard running else { return }
         snapshot = s
         netGen += 1
+        routes = nil
+        freshRoutesPending = true
         deps.resetBackoff()
         guardian.networkChanged()                   // requests a check through onCheckRequested
         updateRouteSchedule(after: 0)
@@ -253,6 +255,8 @@ public final class Engine {
         guard running else { return }
         snapshot = nil                              // re-read: the network may be different now
         netGen += 1
+        routes = nil
+        freshRoutesPending = true
         deps.resetBackoff()
         guardian.didWake()
         guardian.networkChanged()
@@ -275,7 +279,7 @@ public final class Engine {
         snapshot = snap
         let gen = netGen
         if !snap.online { finish([], gen, .full); return }
-        deps.fetchAnswers(mode) { [weak self] a in self?.finish(a, gen, mode) }
+        deps.fetchAnswers(mode, config.ipServices) { [weak self] a in self?.finish(a, gen, mode) }
     }
 
     private func finish(_ answers: [IPAnswer], _ gen: Int, _ mode: IPFetchMode) {
@@ -288,7 +292,7 @@ public final class Engine {
         }
         if mode == .cheap {
             guard Engine.cheapConfirms(answers, last: lastAnswers, minAgree: config.minAgree,
-                                       cheapCount: deps.cheapServiceCount) else {
+                                       cheapCount: selectedCheapCount) else {
                 check(.full)                         // changed IP, too few answers, nothing confirmed
                 return
             }
@@ -310,10 +314,14 @@ public final class Engine {
 
     /// Periodic tick: nothing at all without protected apps; a full fan-out when the last one is
     /// older than `fullRefreshInterval`; else the cheap check.
+    private var selectedCheapCount: Int {
+        config.ipServices.filter { IPServiceSet.cheapHosts.contains($0) }.count
+    }
+
     private func pollTick() {
         guard running, !AppCatalog.appIDs(in: config).isEmpty else { return }
         let due = lastFullAt.map { deps.clock.uptime - $0 >= deps.fullRefreshInterval } ?? true
-        check(due ? .full : .cheap)
+        check(due || selectedCheapCount == 0 ? .full : .cheap)
     }
 
     private func evaluateAndApply() {
@@ -325,9 +333,13 @@ public final class Engine {
         // Display / journal flags: a leak for at least one protected app (each app is judged
         // with its own allow list by `evaluate` through `leakInputs`).
         if let li = s.observation.leakInputs {
+            s.observation.leakInputs?.freshRoutesPending = routesActive && freshRoutesPending
             let lists = Engine.protectedAllowLists(config)
             s.observation.ipv6Leak = li.checkIPv6 && lists.contains { detectIPv6Leak(answers: li.ipv6Answers, allow: $0) }
-            s.observation.routeLeak = li.checkRoutes && lists.contains { detectRouteLeak(li.routes, allow: $0) }
+            s.observation.routeLeak = li.checkRoutes && AppCatalog.appIDs(in: config).contains { id in
+                detectRouteLeak(li.routes, allow: effectiveAllow(for: id, in: config),
+                                hosts: AppCatalog.routeHosts(for: id, in: config))
+            }
         }
         s.observation.ips = Engine.quorumAnswers(lastAnswers)
         lastSample = s
@@ -445,14 +457,21 @@ public final class Engine {
         let oldInterval = config.checkInterval
         let wasActive = routesActive
         let hadApps = !AppCatalog.appIDs(in: config).isEmpty
+        let servicesChanged = Set(config.ipServices) != Set(c.ipServices)
+        if servicesChanged {
+            netGen += 1
+            lastAnswers = []
+            lastFullAt = nil
+            deps.resetBackoff()
+        }
         config = c
-        guardian.updateConfig(c)
+        guardian.updateConfig(c, discardObservation: servicesChanged)
         if oldInterval != c.checkInterval { schedulePoll() }
         if wasActive != routesActive { updateRouteSchedule(after: 0) }
         onConfig?(c)
         if lastSample != nil { evaluateAndApply() } else { publish() }
         // First protected app after a time without polling: the last answers may be old.
-        if !hadApps && !AppCatalog.appIDs(in: c).isEmpty { check(.full) }
+        if servicesChanged || (!hadApps && !AppCatalog.appIDs(in: c).isEmpty) { check(.full) }
     }
 
     // MARK: Timers
@@ -492,6 +511,7 @@ public final class Engine {
             guard self.running, self.routesActive else { self.routes = nil; return }
             if gen == self.netGen {
                 self.routes = r
+                self.freshRoutesPending = false
                 // Re-evaluate with the new route data; no IP fan-out just for a probe (quotas).
                 if self.lastSample != nil && !self.checking { self.evaluateAndApply() } else { self.check(.full) }
             }
@@ -511,7 +531,9 @@ public final class Engine {
         s.notRunningApps = guardian.notRunningApps
         s.closedApps = guardian.closedApps
         s.answers = lastAnswers
-        s.confirmed = Engine.confirmed(Engine.quorumAnswers(lastAnswers), minAgree: config.minAgree)
+        let evidence = Engine.quorumAnswers(lastAnswers)
+        s.confirmed = Engine.confirmed(evidence, minAgree: config.minAgree)
+        if s.confirmed == nil { s.sharedCountry = sharedExitCountry(evidence, minAgree: config.minAgree) }
         s.snapshot = snapshot
         s.observation = lastSample?.observation
         s.dnsUnknown = lastSample?.dnsUnknown ?? false

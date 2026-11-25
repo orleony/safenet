@@ -13,6 +13,8 @@ public enum CLIStatusText {
         }
         if let c = s.confirmed {
             lines.append("IP: \(c.ip) (\(c.country.isEmpty ? "страна неизвестна" : c.country.uppercased()))")
+        } else if let country = s.sharedCountry {
+            lines.append("IP: несколько выходных адресов (\(country))")
         } else if s.answers.isEmpty {
             lines.append("IP: нет ответа" + (s.snapshot?.online == false ? " (нет сети)" : ""))
         } else {
@@ -42,7 +44,7 @@ public enum CLIStatusText {
             return t + ")"
         case .closed: return "Закрыто"
         case .paused(let until):
-            return "Пауза до \(Format.clock(until))"
+            return until.map { "Пауза до \(Format.clock($0))" } ?? "Пауза до перезапуска"
         }
     }
 

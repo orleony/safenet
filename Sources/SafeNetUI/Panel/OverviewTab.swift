@@ -73,6 +73,9 @@ struct OverviewTab: View {
                         Text(Format.countryName(a.country)).font(theme.font(12)).foregroundColor(p.muted.swiftUIColor)
                     }
                 }
+            } else if let country = model.status.sharedCountry {
+                Text("\(Format.flag(country)) \(Format.countryName(country)) · несколько IP")
+                    .font(theme.font(18, weight: .semibold)).foregroundColor(p.text.swiftUIColor)
             } else {
                 Text(model.snapshot?.online == false ? "Нет сети" : (model.status.lastCheck == nil ? "Проверка…" : "IP не подтверждён"))
                     .font(theme.font(20, weight: .semibold)).foregroundColor(p.muted.swiftUIColor)
@@ -97,11 +100,15 @@ struct OverviewTab: View {
 
     private var pauseRow: some View {
         HStack(spacing: theme.spacing - 4) {
-            if case .paused(let until) = model.state {
+            if case .paused(let until?) = model.state {
                 TimelineView(.periodic(from: Date(), by: 1)) { ctx in
                     Button("Возобновить защиту · \(Format.countdown(until.timeIntervalSince(ctx.date)))") { model.resumeProtection() }
                         .buttonStyle(SNButtonStyle(kind: .primary, theme: theme)).fixedSize()
                 }
+            } else if case .paused = model.state {
+                Button("Возобновить защиту") { model.resumeProtection() }
+                    .buttonStyle(SNButtonStyle(kind: .primary, theme: theme)).fixedSize()
+                Note("Пауза до перезапуска")
             } else {
                 Button("Пауза на \(Int(model.defaultPause / 60)) мин") { model.pause() }
                     .buttonStyle(SNButtonStyle(kind: .secondary, theme: theme)).fixedSize()

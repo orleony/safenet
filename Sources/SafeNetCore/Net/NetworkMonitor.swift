@@ -184,7 +184,15 @@ public func currentDNSResolvers(runner: CommandRunner = ProcessCommandRunner()) 
 // MARK: Monitor
 
 /// Weak holder so SCDynamicStore callbacks never touch a deallocated monitor.
-private final class WeakMonitor { weak var m: NetworkMonitor?; init(_ m: NetworkMonitor) { self.m = m } }
+private final class WeakMonitor {
+    weak var monitor: NetworkMonitor?
+    let generation: Int
+
+    init(_ monitor: NetworkMonitor, generation: Int) {
+        self.monitor = monitor
+        self.generation = generation
+    }
+}
 
 /// Watches NWPathMonitor + SystemConfiguration (global IPv4/IPv6/DNS/Proxies) and reports a fresh snapshot
 /// ~50 ms after the last change event. `onChange` fires only when the snapshot differs from the previous one
@@ -221,35 +229,41 @@ public final class NetworkMonitor {
     public func start() {
         lock.lock()
         if running { lock.unlock(); return }
-        running = true; generation += 1; last = nil
+        running = true; generation += 1; last = nil; pathSatisfied = false
         let gen = generation
 
         let pm = NWPathMonitor()
         pm.pathUpdateHandler = { [weak self] path in
             guard let self = self else { return }
-            self.lock.lock(); self.pathSatisfied = path.status == .satisfied; self.lock.unlock()
+            self.lock.lock()
+            guard self.running, self.generation == gen else { self.lock.unlock(); return }
+            self.pathSatisfied = path.status == .satisfied
+            self.lock.unlock()
             self.schedule(gen)
         }
         pm.start(queue: queue)
         pathMonitor = pm
 
-        var ctx = SCDynamicStoreContext(version: 0, info: Unmanaged.passRetained(WeakMonitor(self)).toOpaque(),
-                                        retain: nil,
+        // The framework owns each retain it takes, including on a failed creation.
+        let context = WeakMonitor(self, generation: gen)
+        var ctx = SCDynamicStoreContext(version: 0, info: Unmanaged.passUnretained(context).toOpaque(),
+                                        retain: { UnsafeRawPointer(Unmanaged<WeakMonitor>.fromOpaque($0).retain().toOpaque()) },
                                         release: { Unmanaged<WeakMonitor>.fromOpaque($0).release() },
                                         copyDescription: nil)
         let cb: SCDynamicStoreCallBack = { _, _, info in
             guard let info = info else { return }
             let w = Unmanaged<WeakMonitor>.fromOpaque(info).takeUnretainedValue()
-            if let me = w.m { me.scheduleCurrent() }
+            w.monitor?.schedule(w.generation)
         }
-        if let s = SCDynamicStoreCreate(nil, "SafeNet.monitor" as CFString, cb, &ctx) {
+        let session = withExtendedLifetime(context) {
+            SCDynamicStoreCreate(nil, "SafeNet.monitor" as CFString, cb, &ctx)
+        }
+        if let s = session {
             let keys = ["State:/Network/Global/IPv4", "State:/Network/Global/IPv6",
                         "State:/Network/Global/DNS", "State:/Network/Global/Proxies"] as CFArray
             SCDynamicStoreSetNotificationKeys(s, keys, nil)
             SCDynamicStoreSetDispatchQueue(s, queue)
             store = s
-        } else {
-            Unmanaged<WeakMonitor>.fromOpaque(ctx.info!).release()
         }
         lock.unlock()
         schedule(gen)
@@ -277,11 +291,6 @@ public final class NetworkMonitor {
         lock.lock(); let gen = generation, r = running; lock.unlock()
         guard r else { return }
         queue.async { [weak self] in self?.emit(gen) }
-    }
-
-    fileprivate func scheduleCurrent() {
-        lock.lock(); let gen = generation; lock.unlock()
-        schedule(gen)
     }
 
     private func schedule(_ gen: Int) {

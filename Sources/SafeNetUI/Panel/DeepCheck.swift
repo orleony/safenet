@@ -57,7 +57,11 @@ public enum DeepCheck {
     private static func services(_ d: DeepCheckData, _ allow: AllowList, _ c: Config) -> CheckSection {
         var rows: [CheckRow] = []
         let emptyAllow = allow.ips.isEmpty && allow.countries.isEmpty
-        let confirmed = Engine.confirmed(d.services.compactMap { $0.answer }, minAgree: max(1, c.minAgree))
+        let disabled = Set(IPServiceSet.ipv4Hosts).subtracting(c.ipServices)
+        let participating = d.services.filter { !disabled.contains($0.service) }
+        let answers = Engine.quorumAnswers(participating.compactMap { $0.answer })
+        let need = max(1, c.minAgree)
+        let confirmed = Engine.confirmed(answers, minAgree: need)
         for (i, s) in d.services.enumerated() {
             switch s.outcome {
             case .answer(let a):
@@ -79,13 +83,11 @@ public enum DeepCheck {
                 rows.append(CheckRow(id: "svc-\(i)", level: .unknown, title: s.service, detail: "не ответил вовремя — не проверено"))
             }
         }
-        let answers = d.services.compactMap { $0.answer }
-        let need = max(1, c.minAgree)
-        if let conf = Engine.confirmed(answers, minAgree: need) {
+        if let conf = confirmed {
             let n = answers.filter { $0.ip == conf.ip && $0.country.uppercased() == conf.country.uppercased() }.count
             let countries = Set(answers.map { $0.country.uppercased() })
             let note = countries.count > 1 ? " Сервисы расходятся по стране — так бывает из-за разных баз геолокации." : ""
-            let base = "IP подтверждён: \(n) из \(d.services.count) сервисов назвали \(place(conf.ip, conf.country))."
+            let base = "IP подтверждён: \(n) из \(participating.count) включённых сервисов назвали \(place(conf.ip, conf.country))."
             if emptyAllow {
                 rows.append(CheckRow(id: "svc-summary", level: .warn, title: "Итог", detail: base + " Список «Разрешено» пуст.\(note)",
                                      advice: "Укажите разрешённые страны или IP во вкладке «Разрешено»."))
@@ -95,6 +97,10 @@ public enum DeepCheck {
                 rows.append(CheckRow(id: "svc-summary", level: .fail, title: "Итог",
                                      detail: base + " Подтверждён, но не разрешён.\(note)", advice: vpnAdvice))
             }
+        } else if let country = sharedExitCountry(answers, minAgree: need) {
+            let isAllowed = allow.countries.contains { $0.uppercased() == country }
+            rows.append(CheckRow(id: "svc-summary", level: isAllowed ? .ok : .warn, title: "Итог",
+                                 detail: "Сервисы видят несколько выходных IP. Страна \(Format.countryName(country)) \(isAllowed ? "разрешена" : "не разрешена отдельным правилом")."))
         } else {
             rows.append(CheckRow(id: "svc-summary", level: .fail, title: "Итог",
                                  detail: "IP не подтверждён: нужно не меньше \(need) одинаковых ответов, получено \(answers.count) ответов.",

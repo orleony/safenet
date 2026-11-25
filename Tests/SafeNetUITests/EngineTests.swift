@@ -43,6 +43,7 @@ private final class ERig {
     var fetchCalls = 0
     /// Mode of every fetch, in order.
     var modes: [IPFetchMode] = []
+    var fetchedHosts: [[String]] = []
     /// Answers of the cheap services (nil = the same as `answers`).
     var cheapAnswers: [IPAnswer]?
     /// When set, the next fetch is held until `release()`.
@@ -75,9 +76,10 @@ private final class ERig {
     func rebuild() {
         var deps = EngineDeps(
             clock: clock, freezer: freezer, log: EventLog(url: dir.appendingPathComponent("events.jsonl")), store: store,
-            fetchAnswers: { [unowned self] mode, cb in
+            fetchAnswers: { [unowned self] mode, hosts, cb in
                 self.fetchCalls += 1
                 self.modes.append(mode)
+                self.fetchedHosts.append(hosts)
                 if let rf = self.realFetch { cb(rf(mode)); return }
                 let now = mode == .cheap ? (self.cheapAnswers ?? self.answers) : self.answers
                 if self.holdFetch { self.held = { cb(now) } } else { cb(now) }
@@ -208,8 +210,8 @@ func registerEngineTests() {
         r.clock.advance(by: 0.1)
         expectEqual(r.routeCalls, 1, "first probe at start")
         expect(r.engine.status.routesChecked)
-        r.clock.advance(by: 120)
-        expectEqual(r.routeCalls, 2, "every 120 s")
+        r.clock.advance(by: 15)
+        expectEqual(r.routeCalls, 2, "every 15 s")
         r.engine.networkChanged(online)
         r.clock.advance(by: 0.1)
         expectEqual(r.routeCalls, 3, "after a network change")
@@ -333,8 +335,10 @@ func registerEngineTests() {
         var c = cfg(apps: ["telegram", "chatgpt"])
         c.appRules = ["chatgpt": AllowList(ips: [], countries: ["RU"])]
         let r = ERig(config: c)
+        r.routeResults = [RouteResult(host: "chatgpt.com", ip: "5.6.7.8", country: "RU", error: nil)]
         r.engine.start(watchConfig: false)
         r.engine.networkChanged(online)
+        r.clock.advance(by: 0.1)
         r.table.procs = []                            // the app quit after SIGTERM (fake table keeps it otherwise)
         r.engine.guardian.closeNow()
         expectEqual(r.engine.guardian.closedApps, ["telegram"], "\(r.engine.status.state)")
@@ -583,6 +587,71 @@ func registerEngineTests() {
         expectEqual(r.engine.guardian.frozenApps, ["chatgpt"], "route via RU: leak for ChatGPT (NL only), fine for Telegram")
         if case .frozen(_, let reason, _) = r.engine.status.state { expectEqual(reason, .routeLeak) }
         expectEqual(r.engine.status.observation?.routeLeak, true, "display flag: some app sees a leak")
+    }
+
+    test("testEngineUsesEachAIAppsOwnRouteEvidence") {
+        let r = ERig(config: cfg(apps: ["claude", "chatgpt"], countries: ["RU"]))
+        r.table.procs = [eproc(100, "Claude"), eproc(200, "ChatGPT")]
+        let chatGPT = RouteResult(host: "chatgpt.com", ip: "5.6.7.8", country: "RU", error: nil)
+        r.routeResults = [
+            RouteResult(host: "claude.ai", ip: "1.2.3.4", country: "NL", error: nil),
+            chatGPT,
+        ]
+        r.engine.start(watchConfig: false)
+        r.clock.advance(by: 0.1)
+        expectEqual(r.engine.guardian.frozenApps, ["claude"])
+        expectEqual(r.engine.status.observation?.routeLeak, true)
+
+        r.routeResults = [chatGPT]
+        r.clock.advance(by: 15)
+        expectEqual(r.engine.guardian.frozenApps, ["claude"], "another service cannot confirm Claude's route")
+
+        r.routeResults.append(RouteResult(host: "api.anthropic.com", ip: "5.6.7.8", country: "RU", error: nil))
+        r.clock.advance(by: 15)
+        expectEqual(r.engine.guardian.frozenApps, [])
+        expectEqual(r.engine.status.observation?.routeLeak, false)
+    }
+
+    test("testNetworkChangeRequiresFreshRouteBeforeResumingDedicatedApp") {
+        let r = ERig(config: cfg(apps: ["claude"], countries: ["RU"]))
+        r.table.procs = [eproc(100, "Claude")]
+        let safe = RouteResult(host: "claude.ai", ip: "5.6.7.8", country: "RU", error: nil)
+        r.routeResults = [safe]
+        r.engine.start(watchConfig: false)
+        r.clock.advance(by: 0.1)
+        expectEqual(r.engine.status.state, .ok)
+
+        r.routeResults = [RouteResult(host: "claude.ai", ip: "1.2.3.4", country: "NL", error: nil)]
+        r.engine.networkChanged(online)
+        expectEqual(r.engine.guardian.frozenApps, ["claude"], "old route must not release the app")
+        expect(!r.engine.status.routesChecked)
+        r.clock.advance(by: 0.1)
+        expectEqual(r.engine.guardian.frozenApps, ["claude"])
+
+        r.routeResults = [safe]
+        r.clock.advance(by: 15)
+        expectEqual(r.engine.status.state, .ok)
+    }
+
+    test("testReplacingIPServicesDiscardsInFlightAnswersAndPollsSelectedHosts") {
+        let r = ERig(config: tiered())
+        r.engine.start(watchConfig: false)
+        r.holdFetch = true
+        r.engine.checkNow()
+        let hosts = ["ipinfo.io", "ipapi.co"]
+        r.engine.updateConfig { $0.ipServices = hosts }
+        expectEqual(r.engine.status.confirmed, nil)
+        expectEqual(r.engine.guardian.frozenApps, ["telegram"])
+
+        r.answers = [a("9.9.9.9", "RU"), a("9.9.9.9", "RU")]
+        r.holdFetch = false
+        r.release()
+        expectEqual(r.engine.status.confirmed, a("9.9.9.9", "RU"))
+        expectEqual(r.fetchedHosts.last, hosts)
+        expectEqual(r.engine.status.state, .ok)
+        r.clock.advance(by: 5)
+        expectEqual(r.modes.last, .full, "the two cheap providers are disabled")
+        expectEqual(r.fetchedHosts.last, hosts)
     }
 
     test("testToggleAppIsCaseInsensitiveForPresets") {

@@ -18,10 +18,18 @@ scripts/verify-app.sh           # automated end-to-end check of dist/SafeNet.app
 ```
 
 `dist/` is a build artefact and is not committed. Verification record: `docs/verification.md`.
+On Apple Silicon with Rosetta, `SAFENET_TEST_ARCH=x86_64 scripts/test.sh` runs the Intel test binaries.
 
 ## Network use and rate limits
 
 Only IP-lookup services and `/cdn-cgi/trace` of five AI hosts are contacted (no telemetry).
+Automatic route checks run every 15 seconds while apps are protected. Claude, Claude Code,
+ChatGPT, Codex and Perplexity use the trace results for their own services.
+After a network change, these apps wait for a fresh route check before resuming.
+Settings can enable or disable built-in IPv4 providers (`ip_services` in YAML).
+The manual diagnostic still queries all built-in providers for comparison.
+When the enabled services return multiple exit IPs but unanimously identify the same country,
+an explicit rule allowing that country can pass without confirming a single IP.
 IP polling is tiered so free quotas last: the periodic tick (`check_interval`, default 5 s,
 only while apps are protected) asks the high-limit services `https://1.1.1.1/cdn-cgi/trace`
 (Cloudflare) and `api.country.is` and compares the IP only; the full fan-out (those two plus
@@ -61,6 +69,8 @@ sudo ln -s /Applications/SafeNet.app/Contents/Resources/safenet /usr/local/bin/s
 Then, in a new terminal: `safenet status`.
 
 Commands: `status`, `allow [IP | subnet | country]`, `panel`, `config`, `version`.
+
+The menu can pause protection for a fixed time or until SafeNet restarts.
 
 ## Test mode
 

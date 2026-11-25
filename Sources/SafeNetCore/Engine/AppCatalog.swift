@@ -33,11 +33,23 @@ public enum AppCatalog {
                matches: ["node && args:/@anthropic-ai/claude-code/cli.js", "node && cmd:claude",
                          "/.local/share/claude/", "/Caskroom/claude-code/", "/.claude/local/"], group: aiApps),
         Preset(id: "chatgpt", name: "ChatGPT", matches: ["/ChatGPT.app/"], group: aiApps),
+        Preset(id: "codex", name: "Codex", matches: ["/Codex.app/"], group: aiApps),
         Preset(id: "cursor", name: "Cursor", matches: ["/Cursor.app/"], group: aiApps),
+        Preset(id: "windsurf", name: "Windsurf", matches: ["/Windsurf.app/"], group: aiApps),
+        Preset(id: "vscode", name: "Visual Studio Code", matches: ["/Visual Studio Code.app/"], group: aiApps),
         Preset(id: "perplexity", name: "Perplexity", matches: ["/Perplexity.app/"], group: aiApps),
         Preset(id: "telegram", name: "Telegram", matches: ["/Telegram.app/"], group: nil),
+        Preset(id: "discord", name: "Discord", matches: ["/Discord.app/"], group: nil),
+        Preset(id: "figma", name: "Figma", matches: ["/Figma.app/"], group: nil),
+        Preset(id: "notion", name: "Notion", matches: ["/Notion.app/"], group: nil),
+        Preset(id: "slack", name: "Slack", matches: ["/Slack.app/"], group: nil),
+        Preset(id: "zoom", name: "Zoom", matches: ["/zoom.us.app/"], group: nil),
+        Preset(id: "spotify", name: "Spotify", matches: ["/Spotify.app/"], group: nil),
         Preset(id: "chrome", name: "Google Chrome", matches: ["/Google Chrome.app/"], group: browsersForAI),
         Preset(id: "arc", name: "Arc", matches: ["/Arc.app/"], group: browsersForAI),
+        Preset(id: "brave", name: "Brave", matches: ["/Brave Browser.app/"], group: browsersForAI),
+        Preset(id: "edge", name: "Microsoft Edge", matches: ["/Microsoft Edge.app/"], group: browsersForAI),
+        Preset(id: "yandex", name: "Яндекс Браузер", matches: ["/Yandex.app/"], group: browsersForAI),
         Preset(id: "firefox", name: "Firefox", matches: ["/Firefox.app/"], group: browsersForAI),
         Preset(id: "safari", name: "Safari", matches: [], group: browsersForAI,
                unsupported: "системное приложение: Safari и его веб-процессы запускаются из /System, а системные процессы SafeNet никогда не замораживает"),
@@ -72,4 +84,16 @@ public enum AppCatalog {
     }
 
     public static func displayName(for id: String) -> String { preset(id)?.name ?? id }
+
+    /// Dedicated route evidence for the presets with known trace endpoints.
+    /// Other apps and custom rules keep the common route check.
+    public static func routeHosts(for id: String, in config: Config) -> Set<String>? {
+        guard !config.customApps.contains(where: { $0.name == id }) else { return nil }
+        switch preset(id)?.id {
+        case "claude", "claude-code": return ["claude.ai", "api.anthropic.com"]
+        case "chatgpt", "codex": return ["chatgpt.com", "api.openai.com"]
+        case "perplexity": return ["www.perplexity.ai"]
+        default: return nil
+        }
+    }
 }

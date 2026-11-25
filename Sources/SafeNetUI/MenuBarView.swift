@@ -87,6 +87,9 @@ public struct MenuBarView: View {
                     Text(a.ip).font(theme.font(20, weight: .semibold)).foregroundColor(p.text.swiftUIColor)
                         .lineLimit(1).minimumScaleFactor(0.6).textSelection(.enabled)
                 }
+            } else if let country = model.status.sharedCountry {
+                Text("\(Format.flag(country)) \(country) · несколько IP")
+                    .font(theme.font(15, weight: .semibold)).foregroundColor(p.text.swiftUIColor)
             } else {
                 Text(model.status.snapshot?.online == false ? "Нет сети" : (model.status.lastCheck == nil ? "Проверка…" : "IP не подтверждён"))
                     .font(theme.font(18, weight: .semibold)).foregroundColor(p.muted.swiftUIColor)
@@ -109,17 +112,21 @@ public struct MenuBarView: View {
 
     private var buttons: some View {
         HStack(spacing: theme.spacing - 4) {
-            if case .paused(let until) = model.state {
+            if case .paused(let until?) = model.state {
                 TimelineView(.periodic(from: Date(), by: 1)) { ctx in
                     Button("Возобновить · \(Format.countdown(until.timeIntervalSince(ctx.date)))") { model.resumeProtection() }
                         .buttonStyle(SNButtonStyle(kind: .secondary, theme: theme))
                 }
+            } else if case .paused = model.state {
+                Button("Возобновить защиту") { model.resumeProtection() }
+                    .buttonStyle(SNButtonStyle(kind: .secondary, theme: theme))
             } else {
                 Menu {
                     Button("\(Int(model.defaultPause / 60)) мин (по умолчанию)") { model.pause() }
                     Button("5 мин") { model.pause(for: 5 * 60) }
                     Button("15 мин") { model.pause(for: 15 * 60) }
                     Button("1 час") { model.pause(for: 60 * 60) }
+                    Button("До перезапуска") { model.pauseUntilRestart() }
                 } label: {
                     Text("Пауза").font(theme.font(12, weight: .semibold))
                 }

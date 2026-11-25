@@ -108,6 +108,7 @@ public final class AppState: ObservableObject {
         system?.perform { $0.toggleApp(id) }
     }
     public func pause(for seconds: TimeInterval) { system?.perform { $0.guardian.pause(for: seconds) } }
+    public func pauseUntilRestart() { system?.perform { $0.guardian.pauseUntilRestart() } }
     /// "Пауза" with the configured default length (`pause_default`).
     public func pause() { pause(for: defaultPause) }
     public var defaultPause: TimeInterval { config.pauseDefault }

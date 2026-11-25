@@ -42,7 +42,7 @@ private final class IRig {
                               selfPID: 7, myUID: getuid(), pollInterval: 0.01)
         var deps = EngineDeps(
             clock: clock, freezer: freezer, log: EventLog(url: paths.events), store: store,
-            fetchAnswers: { _, cb in cb([IPAnswer(ip: "1.2.3.4", country: "RU"), IPAnswer(ip: "1.2.3.4", country: "RU")]) },
+            fetchAnswers: { _, _, cb in cb([IPAnswer(ip: "1.2.3.4", country: "RU"), IPAnswer(ip: "1.2.3.4", country: "RU")]) },
             probeRoutes: { _, cb in cb([]) }, resolvers: { [] }, snapshotNow: { iOnline }, queue: nil)
         deps.configWritesBlocked = writesBlocked
         engine = Engine(deps: deps)
@@ -167,7 +167,7 @@ func registerIPCServerTests() {
         let freezer = Freezer(table: IEmptyTable(), signaler: INoSignaler(), journal: r.paths.journal, selfPID: 7, myUID: getuid(), pollInterval: 0.01)
         let deps = EngineDeps(clock: FakeClock(start: Date(timeIntervalSince1970: 1_800_000_000)), freezer: freezer,
                               log: EventLog(url: r.paths.events), store: r.store,
-                              fetchAnswers: { _, cb in cb([]) }, probeRoutes: { _, cb in cb([]) }, resolvers: { [] },
+                              fetchAnswers: { _, _, cb in cb([]) }, probeRoutes: { _, cb in cb([]) }, resolvers: { [] },
                               snapshotNow: { iOnline }, queue: nil)
         let e2 = Engine(deps: deps)
         e2.start(watchConfig: false)

@@ -122,7 +122,7 @@ public struct Config: Equatable {
         if let v = yaml["close_timeout"] { c.closeTimeout = try Config.duration(v, "close_timeout") }
         if let v = yaml["check_interval"] { c.checkInterval = try Config.duration(v, "check_interval") }
         if let v = yaml["min_agree"] { c.minAgree = try Config.int(v, "min_agree") }
-        if let v = yaml["ip_services"] { c.ipServices = try Config.strings(v, "ip_services") }
+        if let v = yaml["ip_services"] { c.ipServices = Config.migrateIPServices(try Config.strings(v, "ip_services")) }
         if let v = yaml["on_timeout"] { c.onTimeout = try Config.enumValue(v, "on_timeout") }
         if let v = yaml["block_when_offline"] { c.blockWhenOffline = try Config.bool(v, "block_when_offline") }
         if let v = yaml["check_ipv6"] { c.checkIPv6 = try Config.bool(v, "check_ipv6") }
@@ -147,6 +147,13 @@ public struct Config: Equatable {
         c.normalisePresetIDs()
         try c.validate()
         self = c
+    }
+
+    /// Lists written before 1.0.6 named IP + country services; any of those names means an old
+    /// list: it becomes the current default set (address services; the country is looked up
+    /// separately now).
+    public static func migrateIPServices(_ list: [String]) -> [String] {
+        list.contains(where: { IPServiceSet.legacyHosts.contains($0) }) ? IPServiceSet.ipv4Hosts : list
     }
 
     /// Value checks shared by the YAML loader and in-app changes (`Engine.updateConfig`).

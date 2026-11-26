@@ -79,7 +79,9 @@ public func sharedExitCountry(_ answers: [IPAnswer], minAgree: Int) -> String? {
 ///  2. trusted network    -> .ok (online on a known network: VPN not required, leak/IP checks skipped)
 ///     empty allow list   -> freeze(.noAllowList) (nothing can pass; the Guard never closes for it)
 ///  3. ipv6 / route leak  -> freeze (always); dns leak -> freeze only in .block mode (.warn/.off never freeze here)
-///  4. confirmation       -> need >= minAgree answers with identical IP AND country (minAgree < 1 is treated as 1);
+///  4. confirmation       -> need >= minAgree answers with identical IP AND country (minAgree < 1 is treated as 1;
+///                           the live app gives every answer for one address the same country, from
+///                           `GeoResolver`, so in practice the IP decides; an empty country = unknown);
 ///                           otherwise, unanimous country evidence can satisfy a country rule
 ///                           even when services see several different exit IPs.
 ///  5. allow list         -> IP matches an exact/CIDR entry OR country is in the list; otherwise freeze.
@@ -114,7 +116,9 @@ public func evaluate(_ o: Observation, allow: AllowList, minAgree: Int, dnsCheck
         if routeHosts != nil, o.leakInputs?.freshRoutesPending == true { return .freeze(.networkChanged) }
         return .ok
     }
-    guard answer != nil else { return .freeze(.unconfirmed) }
+    guard let confirmedAnswer = answer else { return .freeze(.unconfirmed) }
+    // Address confirmed but no GeoIP database could name its country: not known to be wrong.
+    if confirmedAnswer.country.isEmpty && !allow.countries.isEmpty { return .freeze(.unconfirmed) }
     return .freeze(allow.ips.isEmpty && !allow.countries.isEmpty ? .countryNotAllowed : .ipNotAllowed)
 }
 

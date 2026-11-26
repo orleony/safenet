@@ -638,7 +638,7 @@ func registerEngineTests() {
         r.engine.start(watchConfig: false)
         r.holdFetch = true
         r.engine.checkNow()
-        let hosts = ["ipinfo.io", "ipapi.co"]
+        let hosts = ["checkip.amazonaws.com", "v4.ident.me"]
         r.engine.updateConfig { $0.ipServices = hosts }
         expectEqual(r.engine.status.confirmed, nil)
         expectEqual(r.engine.guardian.frozenApps, ["telegram"])

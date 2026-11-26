@@ -18,6 +18,9 @@ public struct EngineStatus: Equatable {
     /// The single IP + country confirmed by >= min_agree services, else nil.
     public var confirmed: IPAnswer?
     public var sharedCountry: String?
+    /// Other IPv4 addresses some services saw next to the confirmed one: split routing (part of
+    /// the traffic goes around the VPN). The route probes of the AI services decide for them.
+    public var splitIPs: [String] = []
     public var snapshot: NetSnapshot?
     public var observation: Observation?
     /// DNS resolvers unreadable while a tunnel is up (warning only under dns_check: warn).
@@ -534,6 +537,7 @@ public final class Engine {
         let evidence = Engine.quorumAnswers(lastAnswers)
         s.confirmed = Engine.confirmed(evidence, minAgree: config.minAgree)
         if s.confirmed == nil { s.sharedCountry = sharedExitCountry(evidence, minAgree: config.minAgree) }
+        s.splitIPs = Engine.splitIPs(evidence, confirmed: s.confirmed)
         s.snapshot = snapshot
         s.observation = lastSample?.observation
         s.dnsUnknown = lastSample?.dnsUnknown ?? false
@@ -554,7 +558,7 @@ public final class Engine {
         return v4.isEmpty ? a : v4
     }
 
-    /// Cheap periodic check (IP only; GeoIP countries differ between services): true when the
+    /// Cheap periodic check (IP only): true when the
     /// last FULL answers confirm an IP, every IPv4 cheap answer equals it, every IPv6 cheap
     /// answer equals an IPv6 address the full check saw (same exit over IPv6), and at least
     /// `min(min_agree, cheapCount)` cheap answers match (at least one of them the IPv4 one).
@@ -574,6 +578,14 @@ public final class Engine {
         }
         let need = min(max(1, minAgree), max(1, cheapCount))
         return v4 >= 1 && v4 + v6 >= need
+    }
+
+    /// IPv4 addresses other than the confirmed one, in first-seen order (none without a confirmed IP).
+    static func splitIPs(_ a: [IPAnswer], confirmed: IPAnswer?) -> [String] {
+        guard let c = confirmed else { return [] }
+        var out: [String] = []
+        for x in a where x.ip != c.ip && !x.ip.contains(":") && !out.contains(x.ip) { out.append(x.ip) }
+        return out
     }
 
     static func confirmed(_ a: [IPAnswer], minAgree: Int) -> IPAnswer? {

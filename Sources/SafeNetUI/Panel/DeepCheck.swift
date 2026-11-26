@@ -13,6 +13,11 @@ public struct DeepCheckData: Equatable {
     public var resolvers: [DNSResolver]?
     public var snapshot: NetSnapshot
     public var finished: Date
+    /// Every GeoIP database's answer about `geoIP`, in priority order (the first valid one is
+    /// the country SafeNet uses).
+    public var geo: [GeoAnswer] = []
+    /// The address the databases were asked about (the one most services saw), nil = none.
+    public var geoIP: String?
 
     public init(services: [ServiceResult], ipv6: ServiceResult?, routes: [RouteResult], resolvers: [DNSResolver]?,
                 snapshot: NetSnapshot, finished: Date) {
@@ -45,7 +50,7 @@ public enum DeepCheck {
 
     public static func sections(_ d: DeepCheckData, config: Config) -> [CheckSection] {
         let allow = Engine.leakAllow(config)
-        return [services(d, allow, config), ipv6(d, allow), dns(d, config), routes(d, allow)]
+        return [services(d, allow, config), countries(d), ipv6(d, allow), dns(d, config), routes(d, allow)]
     }
 
     static func allowed(_ ip: String, _ cc: String, _ allow: AllowList) -> Bool {
@@ -54,6 +59,19 @@ public enum DeepCheck {
 
     static func place(_ ip: String, _ cc: String) -> String { "\(ip) · \(Format.flag(cc)) \(Format.countryName(cc))" }
 
+    /// The address most IPv4 answers name (ties: none).
+    public static func majorityIP(_ answers: [IPAnswer]) -> String? {
+        var n: [String: Int] = [:]
+        for a in answers where !a.ip.contains(":") { n[a.ip, default: 0] += 1 }
+        guard let top = n.values.max(), n.values.filter({ $0 == top }).count == 1 else { return nil }
+        return n.first { $0.value == top }?.key
+    }
+
+    /// The country SafeNet uses for `d.geoIP`: the first valid database answer.
+    static func primaryCountry(_ d: DeepCheckData) -> (country: String, source: String)? {
+        d.geo.first { $0.country != nil }.map { ($0.country!, $0.source) }
+    }
+
     private static func services(_ d: DeepCheckData, _ allow: AllowList, _ c: Config) -> CheckSection {
         var rows: [CheckRow] = []
         let emptyAllow = allow.ips.isEmpty && allow.countries.isEmpty
@@ -61,52 +79,78 @@ public enum DeepCheck {
         let participating = d.services.filter { !disabled.contains($0.service) }
         let answers = Engine.quorumAnswers(participating.compactMap { $0.answer })
         let need = max(1, c.minAgree)
-        let confirmed = Engine.confirmed(answers, minAgree: need)
+        var votes: [String: Int] = [:]
+        for a in answers { votes[a.ip, default: 0] += 1 }
+        let quorum = votes.filter { $0.value >= need }
+        let confirmedIP = quorum.count == 1 ? quorum.first?.key : nil
         for (i, s) in d.services.enumerated() {
+            let off = disabled.contains(s.service) ? " (выключен в Настройках)" : ""
             switch s.outcome {
             case .answer(let a):
-                if emptyAllow {
-                    rows.append(CheckRow(id: "svc-\(i)", level: .warn, title: s.service, detail: place(a.ip, a.country),
-                                         advice: "Список «Разрешено» пуст: ни один адрес не разрешён."))
-                } else if allowed(a.ip, a.country, allow) {
-                    rows.append(CheckRow(id: "svc-\(i)", level: .ok, title: s.service, detail: place(a.ip, a.country) + " — разрешён"))
-                } else if let cf = confirmed, cf.ip == a.ip, allowed(cf.ip, cf.country, allow) {
-                    rows.append(CheckRow(id: "svc-\(i)", level: .warn, title: s.service,
-                                         detail: place(a.ip, a.country) + " — тот же IP, но база этого сервиса считает страну другой"))
+                if confirmedIP == nil || a.ip == confirmedIP {
+                    rows.append(CheckRow(id: "svc-\(i)", level: confirmedIP == nil ? .unknown : .ok, title: s.service, detail: a.ip + off))
                 } else {
-                    rows.append(CheckRow(id: "svc-\(i)", level: .fail, title: s.service,
-                                         detail: place(a.ip, a.country) + " — не из разрешённых", advice: vpnAdvice))
+                    rows.append(CheckRow(id: "svc-\(i)", level: .warn, title: s.service,
+                                         detail: "\(a.ip) — другой адрес: запросы к этому сервису идут мимо VPN (раздельная маршрутизация)\(off)"))
                 }
             case .failed(let why):
-                rows.append(CheckRow(id: "svc-\(i)", level: .unknown, title: s.service, detail: "нет ответа (\(why)) — не проверено"))
+                rows.append(CheckRow(id: "svc-\(i)", level: .unknown, title: s.service, detail: "нет ответа (\(why)) — не проверено\(off)"))
             case .timedOut:
-                rows.append(CheckRow(id: "svc-\(i)", level: .unknown, title: s.service, detail: "не ответил вовремя — не проверено"))
+                rows.append(CheckRow(id: "svc-\(i)", level: .unknown, title: s.service, detail: "не ответил вовремя — не проверено\(off)"))
             }
         }
-        if let conf = confirmed {
-            let n = answers.filter { $0.ip == conf.ip && $0.country.uppercased() == conf.country.uppercased() }.count
-            let countries = Set(answers.map { $0.country.uppercased() })
-            let note = countries.count > 1 ? " Сервисы расходятся по стране — так бывает из-за разных баз геолокации." : ""
-            let base = "IP подтверждён: \(n) из \(participating.count) включённых сервисов назвали \(place(conf.ip, conf.country))."
-            if emptyAllow {
-                rows.append(CheckRow(id: "svc-summary", level: .warn, title: "Итог", detail: base + " Список «Разрешено» пуст.\(note)",
-                                     advice: "Укажите разрешённые страны или IP во вкладке «Разрешено»."))
-            } else if allowed(conf.ip, conf.country, allow) {
-                rows.append(CheckRow(id: "svc-summary", level: .ok, title: "Итог", detail: base + " Разрешён.\(note)"))
-            } else {
-                rows.append(CheckRow(id: "svc-summary", level: .fail, title: "Итог",
-                                     detail: base + " Подтверждён, но не разрешён.\(note)", advice: vpnAdvice))
-            }
-        } else if let country = sharedExitCountry(answers, minAgree: need) {
-            let isAllowed = allow.countries.contains { $0.uppercased() == country }
-            rows.append(CheckRow(id: "svc-summary", level: isAllowed ? .ok : .warn, title: "Итог",
-                                 detail: "Сервисы видят несколько выходных IP. Страна \(Format.countryName(country)) \(isAllowed ? "разрешена" : "не разрешена отдельным правилом")."))
-        } else {
+        guard let ip = confirmedIP else {
             rows.append(CheckRow(id: "svc-summary", level: .fail, title: "Итог",
-                                 detail: "IP не подтверждён: нужно не меньше \(need) одинаковых ответов, получено \(answers.count) ответов.",
-                                 advice: "Проверьте подключение. Если сервисы расходятся из-за VPN, уменьшите «Сколько сервисов должны совпасть» в Настройках."))
+                                 detail: "IP не подтверждён: нужно не меньше \(need) одинаковых адресов, получено ответов: \(answers.count).",
+                                 advice: "Проверьте подключение. Если сервисы видят разные адреса из-за VPN, уменьшите «Сколько сервисов должны совпасть» в Настройках."))
+            return CheckSection(id: "services", title: "Внешний IP (каждый сервис отдельно)", rows: rows)
         }
-        return CheckSection(id: "services", title: "IP-сервисы (каждый отдельно)", rows: rows)
+        let n = votes[ip] ?? 0
+        let primary = d.geoIP == ip ? primaryCountry(d) : nil
+        let cc = primary?.country ?? answers.first { $0.ip == ip && !$0.country.isEmpty }?.country ?? ""
+        let place = cc.isEmpty ? ip + " · страна неизвестна" : DeepCheck.place(ip, cc) + (primary.map { " (по базе \($0.source))" } ?? "")
+        let base = "IP подтверждён: \(n) из \(participating.count) включённых сервисов назвали \(ip). \(place)."
+        if emptyAllow {
+            rows.append(CheckRow(id: "svc-summary", level: .warn, title: "Итог", detail: base + " Список «Разрешено» пуст.",
+                                 advice: "Укажите разрешённые страны или IP во вкладке «Разрешено»."))
+        } else if allowed(ip, cc, allow) {
+            rows.append(CheckRow(id: "svc-summary", level: .ok, title: "Итог", detail: base + " Разрешён."))
+        } else if cc.isEmpty {
+            rows.append(CheckRow(id: "svc-summary", level: .unknown, title: "Итог", detail: base + " Ни одна база не назвала страну — разрешён ли адрес, неизвестно.",
+                                 advice: "Повторите проверку позже: базы стран временно ограничивают запросы."))
+        } else {
+            rows.append(CheckRow(id: "svc-summary", level: .fail, title: "Итог", detail: base + " Не из разрешённых.", advice: vpnAdvice))
+        }
+        let others = Set(answers.map { $0.ip }).subtracting([ip])
+        if !others.isEmpty {
+            rows.append(CheckRow(id: "svc-split", level: .warn, title: "Раздельная маршрутизация",
+                                 detail: "Часть запросов идёт мимо VPN (\(others.sorted().joined(separator: ", "))) — так настроен VPN. Пропускать ли приложения, решает проверка маршрута до ИИ-сервисов ниже.",
+                                 advice: c.routeCheck ? nil : "Включите «Проверять маршрут до ИИ-сервисов» в Настройках, чтобы обход VPN до них тоже замораживал приложения."))
+        }
+        return CheckSection(id: "services", title: "Внешний IP (каждый сервис отдельно)", rows: rows)
+    }
+
+    private static func countries(_ d: DeepCheckData) -> CheckSection {
+        guard let ip = d.geoIP else {
+            return CheckSection(id: "geo", title: "Базы стран", rows: [
+                CheckRow(id: "geo-none", level: .unknown, title: "Базы стран", detail: "Адрес не определён — спрашивать базы не о чем."),
+            ])
+        }
+        let primary = primaryCountry(d)
+        let rows = d.geo.enumerated().map { i, g -> CheckRow in
+            switch g.outcome {
+            case .success(let cc):
+                if primary?.source == g.source {
+                    return CheckRow(id: "geo-\(i)", level: .ok, title: g.source, detail: "\(Format.flag(cc)) \(Format.countryName(cc)) — используется (первая база по порядку)")
+                }
+                let same = cc == primary?.country
+                return CheckRow(id: "geo-\(i)", level: same ? .ok : .warn, title: g.source,
+                                detail: "\(Format.flag(cc)) \(Format.countryName(cc))" + (same ? "" : " — базы расходятся, так бывает с адресами VPN; учитывается первая база"))
+            case .failure(let e):
+                return CheckRow(id: "geo-\(i)", level: .unknown, title: g.source, detail: "нет ответа (\(e.reason))")
+            }
+        }
+        return CheckSection(id: "geo", title: "Страна адреса \(ip) (базы по порядку)", rows: rows)
     }
 
     private static func ipv6(_ d: DeepCheckData, _ allow: AllowList) -> CheckSection {

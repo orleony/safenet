@@ -32,6 +32,18 @@ public final class LiveSystem {
     /// Shown once the window is up (the lock file could not be opened).
     private let lockProblem: String?
 
+    /// Fills in the country of every IPv4 answer from `geo` (one lookup per distinct address,
+    /// remembered). `lookUp` false (cheap tick): only remembered countries, no database request.
+    /// IPv6 answers keep the country their own service gave. Unknown = "".
+    static func withCountries(_ answers: [IPAnswer], geo: GeoResolver, lookUp: Bool) async -> [IPAnswer] {
+        var countries: [String: String] = [:]
+        for ip in Set(answers.filter { !$0.ip.contains(":") }.map { $0.ip }) {
+            let e = lookUp ? await geo.country(of: ip) : geo.cached(ip)
+            countries[ip] = e?.country ?? ""
+        }
+        return answers.map { a in a.ip.contains(":") ? a : IPAnswer(ip: a.ip, country: countries[a.ip] ?? "") }
+    }
+
     public init(environment env: [String: String] = ProcessInfo.processInfo.environment) {
         paths = AppPaths.from(environment: env)
         paths.createDirectory()
@@ -88,43 +100,58 @@ public final class LiveSystem {
                     let routes = URLSessionTraceFetcher.hosts.map {
                         RouteResult(host: $0, ip: ans?.ip, country: ans?.country, error: off || ans == nil ? "test mode offline" : nil)
                     }
-                    cb(DeepCheckData(services: svc, ipv6: ServiceResult(service: "тестовый IPv6", outcome: .failed("test mode")),
-                                     routes: routes, resolvers: resolversNow(), snapshot: snapFn(), finished: Date()))
+                    var d = DeepCheckData(services: svc, ipv6: ServiceResult(service: "тестовый IPv6", outcome: .failed("test mode")),
+                                          routes: routes, resolvers: resolversNow(), snapshot: snapFn(), finished: Date())
+                    if let a = ans, !off {
+                        d.geoIP = a.ip
+                        d.geo = [GeoAnswer(source: "тестовая база", outcome: .success(a.country))]
+                    }
+                    cb(d)
                 }
             }
         } else {
             // Services are created once and reused (each owns a URLSession and its backoff state).
-            // Tiered (ruling R1): the periodic tick asks only the cheap ones; the quota-limited
-            // services and the IPv6 one are asked only in the full fan-out.
-            let cheap: [IPService] = [BackoffIPService(TraceIPService()),
-                                      BackoffIPService(HTTPIPService(spec: IPServiceSet.countryIs))]
-            let limited: [IPService] = IPServiceSet.quotaLimitedSpecs.map { BackoffIPService(HTTPIPService(spec: $0)) }
-            let six: IPService = BackoffIPService(HTTPIPService(spec: HTTPIPService.ipv6Only))
-            let backoffs = (cheap + limited + [six]).compactMap { $0 as? BackoffIPService }
-            resetBackoff = { backoffs.forEach { $0.reset() } }
+            // Tiered (ruling R1): the periodic tick asks only the cheap address services; the
+            // rest and the IPv6 one are asked in the full fan-out. Address services return the IP
+            // only; its country comes from `GeoResolver` (first valid database, remembered per
+            // address), so the quota-limited GeoIP databases are asked only when the IP changes.
+            let v4 = IPServiceSet.makeServices().map { BackoffIPService($0) }
+            let cheapSet = Set(IPServiceSet.cheapHosts)
+            let six = BackoffIPService(HTTPIPService(spec: HTTPIPService.ipv6Only))
+            let geo = GeoResolver(sources: HTTPGeoSource.defaults)
+            resetBackoff = { (v4 + [six]).forEach { $0.reset() }; geo.resetPauses() }
             fetch = { mode, hosts, cb in
                 let selected = Set(hosts)
-                let candidates = mode == .cheap ? cheap : cheap + limited
-                let services = candidates.filter { selected.contains($0.name) } + (mode == .full ? [six] : [])
+                let services: [IPService] = v4.filter { selected.contains($0.name) && (mode == .full || cheapSet.contains($0.name)) }
+                    + (mode == .full ? [six] : [])
                 let checker = IPChecker(services: services, timeout: 6)
-                Task { let a = await checker.check(); q.async { cb(a) } }
+                Task {
+                    let answers = await LiveSystem.withCountries(await checker.check(), geo: geo, lookUp: mode == .full)
+                    q.async { cb(answers) }
+                }
             }
             let rp = RouteProbe()
             probe = { hosts, cb in Task { let r = await rp.check(hosts: hosts); q.async { cb(r) } } }
-            // Deep check: its own unwrapped services, so it neither feeds nor obeys the shared backoff.
-            let deepV4: [IPService] = [TraceIPService(), HTTPIPService(spec: IPServiceSet.countryIs)]
-                + IPServiceSet.quotaLimitedSpecs.map { HTTPIPService(spec: $0) }
-            let v4 = IPChecker(services: deepV4, timeout: 6)
-            let v6 = IPChecker(services: [HTTPIPService(spec: HTTPIPService.ipv6Only)], timeout: 6)
+            // Deep check: its own unwrapped address services, so it neither feeds nor obeys the
+            // shared backoff; every GeoIP database is asked about the majority address.
+            let deepV4 = IPChecker(services: IPServiceSet.makeServices(), timeout: 6)
+            let deep6 = IPChecker(services: [HTTPIPService(spec: HTTPIPService.ipv6Only)], timeout: 6)
             let snapFn = snapshotNow
             deep = { cb in
                 Task.detached {
-                    async let each = v4.checkEach()
-                    async let six = v6.checkEach()
+                    async let each = deepV4.checkEach()
+                    async let sixEach = deep6.checkEach()
                     async let routes = rp.check(hosts: URLSessionTraceFetcher.hosts)
+                    let services = await each
+                    let majority = DeepCheck.majorityIP(services.compactMap { $0.answer })
+                    var geoAnswers: [GeoAnswer] = []
+                    if let ip = majority { geoAnswers = await geo.lookupAll(ip) }
                     let resolvers = resolversNow(), snap = snapFn()
-                    cb(DeepCheckData(services: await each, ipv6: await six.first, routes: await routes,
-                                     resolvers: resolvers, snapshot: snap, finished: Date()))
+                    var d = DeepCheckData(services: services, ipv6: await sixEach.first, routes: await routes,
+                                          resolvers: resolvers, snapshot: snap, finished: Date())
+                    d.geo = geoAnswers
+                    d.geoIP = majority
+                    cb(d)
                 }
             }
         }

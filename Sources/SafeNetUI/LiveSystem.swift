@@ -51,7 +51,7 @@ public final class LiveSystem {
         configReadOnly = testMode != nil && (env["SAFENET_CONFIG_DIR"] ?? "").isEmpty
         let q = queue
         let freezer = Freezer(table: SystemProcessTable(), signaler: KillSignaler(), journal: paths.journal)
-        let fetch: (IPFetchMode, @escaping ([IPAnswer]) -> Void) -> Void
+        let fetch: (IPFetchMode, [String], @escaping ([IPAnswer]) -> Void) -> Void
         let probe: ([String], @escaping ([RouteResult]) -> Void) -> Void
         let runner = ProcessCommandRunner()
         var snapshotNow: () -> NetSnapshot = {
@@ -67,8 +67,9 @@ public final class LiveSystem {
             NSLog("SafeNet: TEST MODE (SAFENET_FAKE_IP=%@, offline=%@)",
                   t.fakeAnswer.map { "\($0.ip),\($0.country)" } ?? "-", t.offline ? "yes" : "no")
             let ans = t.fakeAnswer, off = t.offline
-            fetch = { mode, cb in
-                q.async { cb(off || ans == nil ? [] : Array(repeating: ans!, count: mode == .cheap ? 2 : 4)) }
+            fetch = { mode, hosts, cb in
+                let count = mode == .cheap ? hosts.filter { IPServiceSet.cheapHosts.contains($0) }.count : hosts.count
+                q.async { cb(ans.map { off ? [] : Array(repeating: $0, count: count) } ?? []) }
             }
             probe = { hosts, cb in
                 q.async {
@@ -83,7 +84,7 @@ public final class LiveSystem {
             deep = { cb in
                 DispatchQueue.global().async {
                     let r: ServiceResult.Outcome = off || ans == nil ? .failed("test mode offline") : .answer(ans!)
-                    let svc = (1...4).map { ServiceResult(service: "тестовый сервис \($0)", outcome: r) }
+                    let svc = IPServiceSet.ipv4Hosts.map { ServiceResult(service: $0, outcome: r) }
                     let routes = URLSessionTraceFetcher.hosts.map {
                         RouteResult(host: $0, ip: ans?.ip, country: ans?.country, error: off || ans == nil ? "test mode offline" : nil)
                     }
@@ -101,10 +102,12 @@ public final class LiveSystem {
             let six: IPService = BackoffIPService(HTTPIPService(spec: HTTPIPService.ipv6Only))
             let backoffs = (cheap + limited + [six]).compactMap { $0 as? BackoffIPService }
             resetBackoff = { backoffs.forEach { $0.reset() } }
-            let cheapChecker = IPChecker(services: cheap, timeout: 6)
-            let fullChecker = IPChecker(services: cheap + limited + [six], timeout: 6)
-            fetch = { mode, cb in
-                Task { let a = await (mode == .cheap ? cheapChecker : fullChecker).check(); q.async { cb(a) } }
+            fetch = { mode, hosts, cb in
+                let selected = Set(hosts)
+                let candidates = mode == .cheap ? cheap : cheap + limited
+                let services = candidates.filter { selected.contains($0.name) } + (mode == .full ? [six] : [])
+                let checker = IPChecker(services: services, timeout: 6)
+                Task { let a = await checker.check(); q.async { cb(a) } }
             }
             let rp = RouteProbe()
             probe = { hosts, cb in Task { let r = await rp.check(hosts: hosts); q.async { cb(r) } } }

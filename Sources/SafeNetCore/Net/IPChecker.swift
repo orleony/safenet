@@ -339,6 +339,7 @@ public enum IPServiceSet {
     public static let cheapHosts = ["1.1.1.1", "api.country.is"]
     public static let countryIs = HTTPIPService.defaults[3]
     public static let quotaLimitedSpecs = Array(HTTPIPService.defaults.prefix(3))
+    public static var ipv4Hosts: [String] { cheapHosts + quotaLimitedSpecs.compactMap { $0.url.host } }
 }
 
 /// Mode of one engine check (see `IPServiceSet`).

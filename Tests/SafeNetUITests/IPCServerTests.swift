@@ -42,7 +42,7 @@ private final class IRig {
                               selfPID: 7, myUID: getuid(), pollInterval: 0.01)
         var deps = EngineDeps(
             clock: clock, freezer: freezer, log: EventLog(url: paths.events), store: store,
-            fetchAnswers: { _, cb in cb([IPAnswer(ip: "1.2.3.4", country: "RU"), IPAnswer(ip: "1.2.3.4", country: "RU")]) },
+            fetchAnswers: { _, _, cb in cb([IPAnswer(ip: "1.2.3.4", country: "RU"), IPAnswer(ip: "1.2.3.4", country: "RU")]) },
             probeRoutes: { _, cb in cb([]) }, resolvers: { [] }, snapshotNow: { iOnline }, queue: nil)
         deps.configWritesBlocked = writesBlocked
         engine = Engine(deps: deps)
@@ -107,6 +107,40 @@ func registerIPCServerTests() {
         expect(!resp.text.contains("allow"), "no config content")
     }
 
+    test("testIPCPauseResume") {
+        let r = IRig()
+        try r.server.start()
+        let notPaused = r.ask(.resume)
+        expectEqual(notPaused?.ok, false); expect(notPaused?.text.contains("не на паузе") == true, notPaused?.text ?? "")
+        let p1 = r.ask(.pause("600"))
+        expectEqual(p1?.ok, true); expect(p1?.text.contains("Защита на паузе до") == true, p1?.text ?? "")
+        r.eq.sync {
+            guard case .paused(let until?) = r.engine.guardian.state else { return expect(false, "paused for a time") }
+            expectEqual(until, Date(timeIntervalSince1970: 1_800_000_600), "fake clock start + 600 s")
+        }
+        let back = r.ask(.resume)
+        expectEqual(back?.ok, true); expect(back?.text.contains("возобновлена") == true, back?.text ?? "")
+        r.eq.sync { if case .paused = r.engine.guardian.state { expect(false, "resumed") } }
+        let p2 = r.ask(.pause("restart"))
+        expectEqual(p2?.ok, true); expect(p2?.text.contains("до перезапуска") == true, p2?.text ?? "")
+        r.eq.sync { expectEqual(r.engine.guardian.state, .paused(until: nil)) }
+        let p3 = r.ask(.pause(nil))                           // default length replaces the open-ended pause
+        expectEqual(p3?.ok, true)
+        r.eq.sync {
+            guard case .paused(let until?) = r.engine.guardian.state else { return expect(false, "timed pause") }
+            expect(until > Date(timeIntervalSince1970: 1_800_000_000), "\(until)")
+        }
+        r.eq.sync { expect(!r.engine.log.recent(limit: 50, kinds: [.paused]).isEmpty, "journal has pause events") }
+    }
+
+    test("testIPCCloseWithNothingFrozenToClose") {
+        let r = IRig()                                       // Telegram frozen but not running (empty table)
+        try r.server.start()
+        let resp = r.ask(.close)
+        expectEqual(resp?.ok, false); expect(resp?.text.contains("закрывать нечего") == true, resp?.text ?? "")
+        r.eq.sync { if case .closed = r.engine.guardian.state { expect(false, "nothing was closed") } }
+    }
+
     test("testIPCAllowCountryIPAndCurrent") {
         let r = IRig()
         try r.server.start()
@@ -167,7 +201,7 @@ func registerIPCServerTests() {
         let freezer = Freezer(table: IEmptyTable(), signaler: INoSignaler(), journal: r.paths.journal, selfPID: 7, myUID: getuid(), pollInterval: 0.01)
         let deps = EngineDeps(clock: FakeClock(start: Date(timeIntervalSince1970: 1_800_000_000)), freezer: freezer,
                               log: EventLog(url: r.paths.events), store: r.store,
-                              fetchAnswers: { _, cb in cb([]) }, probeRoutes: { _, cb in cb([]) }, resolvers: { [] },
+                              fetchAnswers: { _, _, cb in cb([]) }, probeRoutes: { _, cb in cb([]) }, resolvers: { [] },
                               snapshotNow: { iOnline }, queue: nil)
         let e2 = Engine(deps: deps)
         e2.start(watchConfig: false)

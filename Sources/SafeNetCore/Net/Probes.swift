@@ -148,9 +148,9 @@ private func allowed(_ a: IPAnswer, _ allow: AllowList) -> Bool {
 ///  - `nil`: the route check was not evaluated (disabled, no protected apps, first probe pending) -> false;
 ///  - non-nil but ZERO successful results (empty, or every host failed) -> true (unconfirmed route);
 ///  - otherwise individual host errors are ignored, and any successful trace outside the allow list -> true.
-public func detectRouteLeak(_ results: [RouteResult]?, allow: AllowList) -> Bool {
+public func detectRouteLeak(_ results: [RouteResult]?, allow: AllowList, hosts: Set<String>? = nil) -> Bool {
     guard let results = results else { return false }
-    let ok = results.filter { $0.error == nil && $0.ip != nil }
+    let ok = results.filter { $0.error == nil && $0.ip != nil && (hosts?.contains($0.host) ?? true) }
     if ok.isEmpty { return true }
     return ok.contains { !allowed(IPAnswer(ip: $0.ip!, country: $0.country ?? ""), allow) }
 }

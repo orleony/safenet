@@ -20,7 +20,7 @@ public enum GuardState: Equatable {
     case ok
     case frozen(since: Date, reason: Reason, deadline: Date?)
     case closed(Date)
-    case paused(until: Date)
+    case paused(until: Date?)
 }
 
 /// Kill-switch state machine. Decides PER APP (each app's effective allow list and grace),
@@ -82,7 +82,11 @@ public final class Guard {
     private var pendingInfo: [Int32: ProcInfo] = [:]
     /// Processes handed to `runClose` (pid -> start time): not "running unstopped" while they die.
     private var closing: [Int32: Date] = [:]
-    private var pausedUntil: Date?
+    private enum Pause {
+        case timed(until: Date)
+        case untilRestart
+    }
+    private var activePause: Pause?
     private var pauseTimer: Cancellable?
     private var pauseGen = 0
     private var deadlineTimer: Cancellable?
@@ -172,19 +176,28 @@ public final class Guard {
     /// User pause: protection off, all apps resumed, protection returns after `d` (max 24 h).
     public func pause(for d: TimeInterval) {
         guard d.isFinite, d > 0 else { return }
+        startPause(duration: min(d, 86_400))
+    }
+
+    public func pauseUntilRestart() { startPause(duration: nil) }
+
+    private func startPause(duration: TimeInterval?) {
         perform {
-            let len = min(d, 86_400)
-            pausedUntil = clock.now.addingTimeInterval(len)
+            activePause = duration.map { .timed(until: clock.now.addingTimeInterval($0)) } ?? .untilRestart
             for id in Array(apps.keys) { release(id) }
             apps = [:]
             record(.paused, nil, "pause")
-            schedulePauseTimer(after: len)
+            if let duration = duration {
+                schedulePauseTimer(after: duration)
+            } else {
+                cancelPauseTimer()
+            }
             reconcileProcesses()
         }
     }
 
     /// Ends a pause early ("resume protection"). No-op when not paused.
-    public func resume() { perform { if pausedUntil != nil { endPause() } } }
+    public func resume() { perform { if activePause != nil { endPause() } } }
 
     /// Offers the last CONFIRMED IP to `onAllowIP`. Nothing happens when none is confirmed.
     public func allowCurrentIP() {
@@ -222,7 +235,7 @@ public final class Guard {
         perform {
             record(.networkChanged, nil, "networkChanged")
             requestCheck()
-            guard pausedUntil == nil else { return }
+            guard activePause == nil else { return }
             let off = lastObservation.map { !$0.online } ?? false
             for id in ids() {
                 let p = apps[id]?.phase ?? .ok
@@ -249,7 +262,7 @@ public final class Guard {
             sleeping = false
             // The pause end is a wall-clock time the user sees ("Пауза до HH:MM"), but its timer
             // runs on uptime, which stops during sleep: re-arm it for the remaining wall time.
-            if let u = pausedUntil {
+            if case .timed(let u) = activePause {
                 let left = u.timeIntervalSince(clock.now)
                 if left <= 0 { endPause() } else { schedulePauseTimer(after: left) }
             }
@@ -264,12 +277,16 @@ public final class Guard {
     /// New settings. Removed apps are unfrozen; the last observation is re-evaluated at once
     /// (e.g. a newly allowed country resumes apps). Running countdowns keep their deadline; a
     /// changed grace applies to the next freeze.
-    public func updateConfig(_ c: Config) {
+    public func updateConfig(_ c: Config, discardObservation: Bool = false) {
         perform {
+            if discardObservation {
+                lastObservation = nil
+                lastConfirmedIP = nil
+            }
             config = c
             let keep = Set(ids())
             for id in Array(apps.keys) where !keep.contains(id) { release(id); apps[id] = nil }
-            if pausedUntil == nil, let o = lastObservation { process(o) } else { reconcileProcesses() }
+            if activePause == nil, let o = lastObservation { process(o) } else { reconcileProcesses() }
         }
     }
 
@@ -279,10 +296,10 @@ public final class Guard {
         lastObservation = o
         lastConfirmedIP = Guard.confirmedIP(o, minAgree: config.minAgree)
         logLeakEdges(o)
-        guard pausedUntil == nil else { reconcileProcesses(); return }
+        guard activePause == nil else { reconcileProcesses(); return }
         for id in ids() {
             let v = evaluate(o, allow: effectiveAllow(for: id, in: config), minAgree: config.minAgree,
-                             dnsCheck: config.dnsCheck)
+                             dnsCheck: config.dnsCheck, routeHosts: AppCatalog.routeHosts(for: id, in: config))
             transition(id, v)
         }
         reconcileProcesses()
@@ -494,8 +511,7 @@ public final class Guard {
     }
 
     private func schedulePauseTimer(after len: TimeInterval) {
-        pauseTimer?.cancel()
-        pauseGen += 1
+        cancelPauseTimer()
         let gen = pauseGen
         pauseTimer = clock.schedule(after: len) { [weak self] in
             self?.perform { self?.pauseFired(gen) }
@@ -503,21 +519,26 @@ public final class Guard {
     }
 
     private func pauseFired(_ gen: Int) {
-        guard gen == pauseGen, pausedUntil != nil else { return }
+        guard gen == pauseGen, case .timed = activePause else { return }
         endPause()
     }
 
     private func endPause() {
-        pausedUntil = nil
-        pauseTimer?.cancel(); pauseTimer = nil
-        pauseGen += 1
+        activePause = nil
+        cancelPauseTimer()
         record(.paused, nil, "resumeProtection")
         requestCheck()
         if let o = lastObservation { process(o) } else { reconcileProcesses() }
     }
 
+    private func cancelPauseTimer() {
+        pauseTimer?.cancel()
+        pauseTimer = nil
+        pauseGen += 1
+    }
+
     private func deadlineFired(_ gen: Int) {
-        guard gen == timerGen, !sleeping, pausedUntil == nil else { return }
+        guard gen == timerGen, !sleeping, activePause == nil else { return }
         handleTimeouts()
     }
 
@@ -526,7 +547,7 @@ public final class Guard {
     private func rearmDeadlineTimer() {
         deadlineTimer?.cancel(); deadlineTimer = nil
         timerGen += 1
-        guard !sleeping, pausedUntil == nil,
+        guard !sleeping, activePause == nil,
               let next = apps.values.filter({ $0.phase == .frozen }).compactMap({ $0.deadline }).min() else { return }
         let gen = timerGen
         deadlineTimer = clock.schedule(after: next - clock.uptime) { [weak self] in
@@ -553,7 +574,8 @@ public final class Guard {
     }
 
     private func computeState() -> GuardState {
-        if let u = pausedUntil { return .paused(until: u) }
+        if case .timed(let until) = activePause { return .paused(until: until) }
+        if case .untilRestart = activePause { return .paused(until: nil) }
         let all = ids()
         let order = all + apps.keys.filter { !all.contains($0) }.sorted()
         let fr = order.compactMap { apps[$0] }.filter { $0.phase == .frozen }

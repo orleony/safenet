@@ -33,8 +33,10 @@ public struct LeakInputs: Equatable {
     public var routes: [RouteResult]?
     public var checkIPv6: Bool
     public var checkRoutes: Bool
+    public var freshRoutesPending: Bool
     public init(ipv6Answers: [IPAnswer], routes: [RouteResult]?, checkIPv6: Bool, checkRoutes: Bool) {
         self.ipv6Answers = ipv6Answers; self.routes = routes; self.checkIPv6 = checkIPv6; self.checkRoutes = checkRoutes
+        self.freshRoutesPending = false
     }
 }
 
@@ -61,22 +63,37 @@ public func effectiveAllow(for app: String, in config: Config) -> AllowList {
     config.appRules[app] ?? config.allow
 }
 
+/// Multiple exit IPs can establish a country, but cannot establish a single address.
+public func sharedExitCountry(_ answers: [IPAnswer], minAgree: Int) -> String? {
+    guard answers.count >= max(2, minAgree), let first = answers.first,
+          Set(answers.map(\.ip)).count > 1 else { return nil }
+    let country = first.country.uppercased()
+    guard country.utf8.count == 2, country.utf8.allSatisfy({ (65...90).contains($0) }),
+          answers.allSatisfy({ $0.country.uppercased() == country && HTTPIPService.isValidIP($0.ip) })
+    else { return nil }
+    return country
+}
+
 /// Pure policy. Evaluation order (first match wins; any uncertainty = freeze):
 ///  1. offline            -> .offline (checked before everything, trusted network included: no link, nothing to trust)
 ///  2. trusted network    -> .ok (online on a known network: VPN not required, leak/IP checks skipped)
 ///     empty allow list   -> freeze(.noAllowList) (nothing can pass; the Guard never closes for it)
 ///  3. ipv6 / route leak  -> freeze (always); dns leak -> freeze only in .block mode (.warn/.off never freeze here)
 ///  4. confirmation       -> need >= minAgree answers with identical IP AND country (minAgree < 1 is treated as 1);
-///                           none, or several different groups reaching quorum -> .unconfirmed
+///                           otherwise, unanimous country evidence can satisfy a country rule
+///                           even when services see several different exit IPs.
 ///  5. allow list         -> IP matches an exact/CIDR entry OR country is in the list; otherwise freeze.
 ///                           An EMPTY allow list allows nothing (fail closed).
-public func evaluate(_ o: Observation, allow: AllowList, minAgree: Int, dnsCheck: DNSCheckMode) -> Verdict {
+public func evaluate(_ o: Observation, allow: AllowList, minAgree: Int, dnsCheck: DNSCheckMode,
+                     routeHosts: Set<String>? = nil) -> Verdict {
     guard o.online else { return .offline }
     if o.trustedNetwork { return .ok }
     if allow.ips.isEmpty && allow.countries.isEmpty { return .freeze(.noAllowList) }
     let v6 = o.leakInputs.map { $0.checkIPv6 && detectIPv6Leak(answers: $0.ipv6Answers, allow: allow) } ?? o.ipv6Leak
     if v6 { return .freeze(.ipv6Leak) }
-    let route = o.leakInputs.map { $0.checkRoutes && detectRouteLeak($0.routes, allow: allow) } ?? o.routeLeak
+    let route = o.leakInputs.map {
+        $0.checkRoutes && detectRouteLeak($0.routes, allow: allow, hosts: routeHosts)
+    } ?? o.routeLeak
     if route { return .freeze(.routeLeak) }
     if o.dnsLeak && dnsCheck == .block { return .freeze(.dnsLeak) }
 
@@ -87,11 +104,17 @@ public func evaluate(_ o: Observation, allow: AllowList, minAgree: Int, dnsCheck
         groups[key, default: (a, 0)].count += 1
     }
     let confirmed = groups.values.filter { $0.count >= quorum }
-    guard confirmed.count == 1, let answer = confirmed.first?.answer else { return .freeze(.unconfirmed) }
-
-    if allow.ips.contains(where: { IPMatcher.matches(answer.ip, entry: $0) }) { return .ok }
-    let country = answer.country.uppercased()
-    if allow.countries.contains(where: { $0.uppercased() == country && !country.isEmpty }) { return .ok }
+    let answer = confirmed.count == 1 ? confirmed.first?.answer : nil
+    let country = answer?.country.uppercased() ?? sharedExitCountry(o.ips, minAgree: quorum)
+    let allowedIP = answer.map { answer in allow.ips.contains { IPMatcher.matches(answer.ip, entry: $0) } } ?? false
+    let allowedCountry = country.map { country in
+        !country.isEmpty && allow.countries.contains { $0.uppercased() == country }
+    } ?? false
+    if allowedIP || allowedCountry {
+        if routeHosts != nil, o.leakInputs?.freshRoutesPending == true { return .freeze(.networkChanged) }
+        return .ok
+    }
+    guard answer != nil else { return .freeze(.unconfirmed) }
     return .freeze(allow.ips.isEmpty && !allow.countries.isEmpty ? .countryNotAllowed : .ipNotAllowed)
 }
 

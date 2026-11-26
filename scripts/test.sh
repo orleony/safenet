@@ -1,5 +1,6 @@
 #!/bin/bash
-# Usage: scripts/test.sh [name-substring-filter]   (SAFENET_TEST_TIMEOUT=<s> per binary, default 600)
+# Usage: scripts/test.sh [name-substring-filter]
+# SAFENET_TEST_ARCH overrides the native architecture. Running x86_64 on Apple Silicon requires Rosetta.
 # Builds each module with -enable-testing, builds one test executable per
 # Tests/<Module>Tests directory (TestKit + tests + generated main.swift), runs them.
 # main.swift is generated: it calls every `func registerXxxTests()` found in the test files.
@@ -8,7 +9,11 @@ cd "$(dirname "$0")/.." || exit 2
 ROOT="$PWD"
 FILTER="${1:-}"
 TEST_TIMEOUT="${SAFENET_TEST_TIMEOUT:-600}"   # per test binary, seconds
-ARCH="$(uname -m)"
+ARCH="${SAFENET_TEST_ARCH:-$(uname -m)}"
+case "$ARCH" in
+  arm64|x86_64) ;;
+  *) echo "Unsupported test architecture: $ARCH" >&2; exit 2 ;;
+esac
 OUT="$ROOT/.build/test"
 TARGET="$ARCH-apple-macos13"
 [ -n "$ROOT" ] && [ "$OUT" = "$ROOT/.build/test" ] || exit 2

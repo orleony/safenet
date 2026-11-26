@@ -838,6 +838,25 @@ func registerGuardC2Tests() {
 
     // MARK: I2: the pause ends at its wall-clock time also across sleep
 
+    test("testPauseUntilRestartSurvivesTimerWakeAndNetworkChange") {
+        let r = Rig(); let g = r.guardian
+        g.apply(bad)
+        g.pause(for: 60)
+        g.pauseUntilRestart()
+        expectEqual(g.state, .paused(until: nil))
+        expectEqual(g.frozenApps, [])
+        g.willSleep()
+        r.clock.jumpWallClock(by: 90)
+        g.didWake()
+        g.networkChanged()
+        g.apply(bad)
+        r.clock.advance(by: 86_401)
+        expectEqual(g.state, .paused(until: nil))
+        expectEqual(g.frozenApps, [])
+        g.resume()
+        expectEqual(g.frozenApps, ["claude", "telegram"])
+    }
+
     test("testPauseEndsAtWallClockTimeAfterSleep") {
         let r = Rig(); let g = r.guardian
         g.pause(for: 300)

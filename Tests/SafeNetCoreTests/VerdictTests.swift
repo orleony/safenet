@@ -13,8 +13,15 @@ func registerVerdictTests() {
         expectEqual(evaluate(obs([("1.2.3.4", "NL"), ("1.2.3.4", "NL")]), allow: nl, minAgree: 2, dnsCheck: .warn), .ok)
     }
     test("testFreezeWhenServicesDisagree") {
-        expectEqual(evaluate(obs([("1.2.3.4", "NL"), ("5.6.7.8", "NL")]), allow: nl, minAgree: 2, dnsCheck: .warn), .freeze(.unconfirmed))
+        expectEqual(evaluate(obs([("1.2.3.4", "NL"), ("5.6.7.8", "FR")]), allow: nl, minAgree: 2, dnsCheck: .warn), .freeze(.unconfirmed))
         expectEqual(evaluate(obs([("1.2.3.4", "NL"), ("1.2.3.4", "DE")]), allow: nl, minAgree: 2, dnsCheck: .warn), .freeze(.unconfirmed))
+    }
+    test("testSeveralExitIPsNeedUnanimousCountryEvidenceAndAnExplicitCountryRule") {
+        let o = obs([("1.2.3.4", "NL"), ("5.6.7.8", "NL")])
+        expectEqual(evaluate(o, allow: nl, minAgree: 2, dnsCheck: .warn), .ok)
+        expectEqual(evaluate(o, allow: AllowList(ips: ["1.2.3.4", "5.6.7.8"]),
+                             minAgree: 2, dnsCheck: .warn), .freeze(.unconfirmed))
+        expectEqual(evaluate(o, allow: nl, minAgree: 3, dnsCheck: .warn), .freeze(.unconfirmed))
     }
     test("testFreezeWhenNoAnswersOnline") {
         expectEqual(evaluate(obs([]), allow: nl, minAgree: 2, dnsCheck: .warn), .freeze(.unconfirmed))

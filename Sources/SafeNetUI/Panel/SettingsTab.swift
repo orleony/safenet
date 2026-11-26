@@ -8,7 +8,7 @@ struct SettingsTab: View {
     @EnvironmentObject var theme: Theme
 
     /// IPv4 IP services taking part in the quorum (min_agree above this can never be met).
-    static let serviceCount = HTTPIPService.defaults.count
+    static let serviceCount = IPServiceSet.ipv4Hosts.count
 
     var body: some View {
         let p = theme.palette
@@ -43,12 +43,27 @@ struct SettingsTab: View {
                 durationRow("Интервал проверки", "Опрос IP по таймеру в дополнение к системным событиям сети (1–300 с).",
                             c.checkInterval, 1...300) { v in model.update { $0.checkInterval = v } }
                 SettingRow("Сколько сервисов должны совпасть",
-                           detail: "IP подтверждён, когда столько сервисов назвали один IP и одну страну. 1 — быстрее, но один ошибочный ответ решает всё; 2 — рекомендуется; \(SettingsTab.serviceCount) — любое расхождение замораживает.") {
-                    Segmented(options: (1...SettingsTab.serviceCount).map { ($0, "\($0)") }, selection: c.minAgree) { v in model.update { $0.minAgree = v } }
+                           detail: "Столько ответов нужно для подтверждения. Несколько IP допускаются при единогласном подтверждении разрешённой страны. Активно \(c.ipServices.count) из \(SettingsTab.serviceCount).") {
+                    Segmented(options: (1...max(1, c.ipServices.count)).map { ($0, "\($0)") }, selection: c.minAgree) { v in model.update { $0.minAgree = v } }
                 }
-                if c.minAgree > SettingsTab.serviceCount {
-                    Note("Сейчас \(c.minAgree), а сервисов \(SettingsTab.serviceCount): IP никогда не подтвердится и приложения будут заморожены всегда.",
+                if c.minAgree > c.ipServices.count {
+                    Note("Требуется \(c.minAgree) совпадений, но включено \(c.ipServices.count) сервисов.",
                          symbol: "exclamationmark.triangle", color: p.danger)
+                }
+                ForEach(IPServiceSet.ipv4Hosts, id: \.self) { host in
+                    let enabled = c.ipServices.contains(host)
+                    SettingRow(host) {
+                        toggle(host, enabled) { on in
+                            model.update { config in
+                                if on {
+                                    if !config.ipServices.contains(host) { config.ipServices.append(host) }
+                                } else if config.ipServices.count > config.minAgree {
+                                    config.ipServices.removeAll { $0 == host }
+                                }
+                            }
+                        }
+                        .disabled(enabled && c.ipServices.count <= c.minAgree)
+                    }
                 }
                 SettingRow("Проверять IPv6", detail: "Замораживать, если IPv6 выходит мимо VPN.") {
                     toggle("Проверять IPv6", c.checkIPv6) { v in model.update { $0.checkIPv6 = v } }
@@ -57,7 +72,7 @@ struct SettingsTab: View {
                     Segmented(options: [(DNSCheckMode.warn, "Предупреждать"), (.block, "Замораживать"), (.off, "Выключена")],
                               selection: c.dnsCheck) { v in model.update { $0.dnsCheck = v } }
                 }
-                SettingRow("Маршрут до ИИ-сервисов", detail: "Раз в 2 минуты и после смены сети спрашивает /cdn-cgi/trace у пяти ИИ-сервисов (только когда есть защищаемые приложения).") {
+                SettingRow("Маршрут до ИИ-сервисов", detail: "Раз в 15 секунд и после смены сети проверяет, какой IP видят ИИ-сервисы. Claude, ChatGPT, Codex и Perplexity оцениваются по маршрутам своих сервисов.") {
                     toggle("Маршрут до ИИ-сервисов", c.routeCheck) { v in model.update { $0.routeCheck = v } }
                 }
             }

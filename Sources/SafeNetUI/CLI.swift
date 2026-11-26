@@ -13,6 +13,8 @@ public enum CLIStatusText {
         }
         if let c = s.confirmed {
             lines.append("IP: \(c.ip) (\(c.country.isEmpty ? "страна неизвестна" : c.country.uppercased()))")
+        } else if let country = s.sharedCountry {
+            lines.append("IP: несколько выходных адресов (\(country))")
         } else if s.answers.isEmpty {
             lines.append("IP: нет ответа" + (s.snapshot?.online == false ? " (нет сети)" : ""))
         } else {
@@ -42,7 +44,7 @@ public enum CLIStatusText {
             return t + ")"
         case .closed: return "Закрыто"
         case .paused(let until):
-            return "Пауза до \(Format.clock(until))"
+            return until.map { "Пауза до \(Format.clock($0))" } ?? "Пауза до перезапуска"
         }
     }
 
@@ -89,7 +91,47 @@ public final class CLIService {
             }
         case .allow(let target):
             perform { e in reply(CLIService.allow(target, engine: e)) }
+        case .pause(let arg):
+            perform { e in reply(CLIService.pause(arg, engine: e)) }
+        case .resume:
+            perform { e in reply(CLIService.resume(engine: e)) }
+        case .close:
+            perform { e in reply(CLIService.closeNow(engine: e)) }
         }
+    }
+
+    /// Engine queue. `arg`: nil = `pause_default`, "restart", or seconds (already validated by the parser).
+    static func pause(_ arg: String?, engine e: Engine, now: Date = Date()) -> IPCResponse {
+        guard e.isRunning else { return .error("SafeNet завершает работу: ничего не изменено") }
+        if arg == "restart" {
+            e.guardian.pauseUntilRestart()
+            return IPCResponse(ok: true, text: "Защита на паузе до перезапуска SafeNet")
+        }
+        let seconds = arg.flatMap { TimeInterval($0) } ?? e.config.pauseDefault
+        e.guardian.pause(for: seconds)
+        if case .paused(let until?) = e.guardian.state {
+            return IPCResponse(ok: true, text: "Защита на паузе до \(Format.clock(until))")
+        }
+        return .error("Не удалось поставить защиту на паузу")
+    }
+
+    static func resume(engine e: Engine) -> IPCResponse {
+        guard e.isRunning else { return .error("SafeNet завершает работу: ничего не изменено") }
+        guard case .paused = e.guardian.state else { return .error("Защита не на паузе") }
+        e.guardian.resume()
+        return IPCResponse(ok: true, text: "Защита возобновлена")
+    }
+
+    /// Closes the apps that are frozen right now. Never touches running, protected apps.
+    static func closeNow(engine e: Engine) -> IPCResponse {
+        guard e.isRunning else { return .error("SafeNet завершает работу: ничего не изменено") }
+        let st = e.status
+        let ids = AppCatalog.appIDs(in: e.config).filter {
+            (st.frozenApps.contains($0) || st.freezeFailedApps.contains($0)) && !st.notRunningApps.contains($0)
+        }
+        guard !ids.isEmpty else { return .error("Нет замороженных приложений: закрывать нечего") }
+        e.guardian.closeNow()
+        return IPCResponse(ok: true, text: "Закрываю: " + ids.map { AppCatalog.displayName(for: $0) }.joined(separator: ", "))
     }
 
     /// Engine queue. The same change the UI makes, through `Engine.updateConfig` (test-mode write

@@ -64,8 +64,33 @@ func registerIPCTests() {
         try expectEqual(decodeRequest(Data("{\"v\":1,\"cmd\":\"allow\",\"arg\":\"nl\"}\n".utf8)), .allow("NL"))
     }
 
+    test("testParsePauseResumeClose") {
+        expectEqual(parseCLI(["pause"]), .pause(nil))
+        expectEqual(parseCLI(["pause", "90"]), .pause("90"))
+        expectEqual(parseCLI(["pause", "90s"]), .pause("90"))
+        expectEqual(parseCLI(["pause", "15m"]), .pause("900"))
+        expectEqual(parseCLI(["pause", "2H"]), .pause("7200"))
+        expectEqual(parseCLI(["pause", "24h"]), .pause("86400"))
+        expectEqual(parseCLI(["pause", "restart"]), .pause("restart"))
+        expectEqual(parseCLI(["pause", "until-restart"]), .pause("restart"))
+        expectEqual(parseCLI(["resume"]), .resume)
+        expectEqual(parseCLI(["close"]), .close)
+        for bad in ["0", "0m", "25h", "86401", "-5", "1.5m", "m", "", "5d", "5 m", "1e3", "abc", "9999999h"] {
+            expect(parseCLI(["pause", bad]) == nil, "must reject pause \(bad)")
+        }
+        expect(parseCLI(["pause", "5m", "x"]) == nil)
+        expect(parseCLI(["resume", "x"]) == nil)
+        expect(parseCLI(["close", "telegram"]) == nil)
+        for c: CLICommand in [.pause(nil), .pause("900"), .pause("restart"), .resume, .close] {
+            try expectEqual(decodeRequest(encodeMessage(IPCRequest(c))), c)
+        }
+        expectThrows { _ = try decodeRequest(Data("{\"v\":1,\"cmd\":\"pause\",\"arg\":\"0\"}\n".utf8)) }
+        expectThrows { _ = try decodeRequest(Data("{\"v\":1,\"cmd\":\"close\",\"arg\":\"x\"}\n".utf8)) }
+        try expectEqual(decodeRequest(Data("{\"v\":1,\"cmd\":\"pause\",\"arg\":\"5m\"}\n".utf8)), .pause("300"))
+    }
+
     test("testUsageText") {
-        for w in ["status", "allow", "panel", "config", "version"] { expect(cliUsage.contains(w), w) }
+        for w in ["status", "allow", "pause", "resume", "close", "panel", "config", "version"] { expect(cliUsage.contains(w), w) }
         expect(CLICommand.config.isLocal && CLICommand.version.isLocal && !CLICommand.status.isLocal)
     }
 }

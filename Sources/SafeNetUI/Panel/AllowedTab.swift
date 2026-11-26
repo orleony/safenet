@@ -33,7 +33,7 @@ struct AllowListEditor: View {
         let p = theme.palette
         VStack(alignment: .leading, spacing: theme.spacing + 2) {
             Card {
-                Text("Страны").font(theme.font(12, weight: .semibold)).foregroundColor(p.text.swiftUIColor)
+                CardTitle("Страны")
                 if list.countries.isEmpty { Note("Нет разрешённых стран") }
                 ForEach(list.countries, id: \.self) { cc in
                     RemovableRow(title: "\(Format.flag(cc)) \(Format.countryName(cc))", detail: cc.uppercased(),
@@ -65,7 +65,7 @@ struct AllowListEditor: View {
                                commit: { v in change { l in if !l.countries.contains(v) { l.countries.append(v) } } })
             }
             Card {
-                Text("IP-адреса и подсети").font(theme.font(12, weight: .semibold)).foregroundColor(p.text.swiftUIColor)
+                CardTitle("IP-адреса и подсети")
                 if list.ips.isEmpty { Note("Нет разрешённых адресов") }
                 ForEach(list.ips, id: \.self) { ip in
                     RemovableRow(title: ip, detail: ip.contains("/") ? "подсеть" : "адрес", removeLabel: "Убрать \(ip)") {

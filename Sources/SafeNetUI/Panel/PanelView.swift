@@ -46,12 +46,13 @@ public struct PanelView: View {
         let p = theme.palette
         HStack(spacing: 0) {
             sidebar
-            Rectangle().fill(p.hairline.swiftUIColor).frame(width: Metrics.hairlineWidth)
+            Rectangle().fill(p.text.swiftUIColor.opacity(0.06)).frame(width: Metrics.hairlineWidth)
             ScrollView {
                 content
-                    .frame(maxWidth: 860, alignment: .topLeading)   // readable column, centred on wide/full-screen windows
+                    .frame(maxWidth: 820, alignment: .topLeading)   // readable column, centred on wide/full-screen windows
                     .frame(maxWidth: .infinity, alignment: .top)
-                    .padding(theme.padding + 6)
+                    .padding(.horizontal, theme.padding + 14)
+                    .padding(.vertical, theme.padding + 10)
             }
             .background(p.background.swiftUIColor)
         }
@@ -62,15 +63,17 @@ public struct PanelView: View {
 
     private var sidebar: some View {
         let p = theme.palette
-        return VStack(alignment: .leading, spacing: 2) {
-            HStack(spacing: theme.smallGap) {
-                Image(systemName: Format.stateSymbol(model.state))
+        return VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: theme.smallGap + 2) {
+                Image(systemName: "shield.lefthalf.filled")
+                    .font(.system(size: 15, weight: .semibold))
                     .foregroundColor(stateColor(model.state, p).swiftUIColor)
                     .accessibilityHidden(true)
-                Text("SafeNet").font(theme.font(14, weight: .bold)).foregroundColor(p.text.swiftUIColor)
+                Text("SafeNet").font(theme.display(16, weight: .bold)).foregroundColor(p.text.swiftUIColor)
             }
             .padding(.horizontal, theme.spacing - 4)
-            .padding(.bottom, theme.spacing)
+            .padding(.top, theme.smallGap)
+            .padding(.bottom, theme.spacing + 4)
             ForEach(Array(PanelTab.allCases.enumerated()), id: \.element) { i, t in
                 Button { tab = t } label: {
                     HStack(spacing: theme.spacing - 4) {
@@ -78,15 +81,13 @@ public struct PanelView: View {
                         Text(t.title).lineLimit(1)
                         Spacer(minLength: 0)
                     }
-                    .font(theme.font(12, weight: tab == t ? .semibold : .regular))
+                    .font(theme.font(12.5, weight: tab == t ? .semibold : .medium))
                     .foregroundColor((tab == t ? p.text : p.muted).swiftUIColor)
-                    .padding(.horizontal, theme.spacing - 4).padding(.vertical, theme.rowPadding + 1)
-                    .background(RoundedRectangle(cornerRadius: Metrics.smallCornerRadius)
-                        .fill(tab == t ? p.sidebarActive.swiftUIColor : Color.clear))
-                    .overlay(alignment: .leading) {
-                        if tab == t { Capsule().fill(p.accent.swiftUIColor).frame(width: 3, height: 14) }
-                    }
-                    .contentShape(Rectangle())
+                    .padding(.horizontal, theme.spacing - 2).padding(.vertical, theme.rowPadding + 2)
+                    .background(Capsule().fill(tab == t ? p.accent.swiftUIColor.opacity(0.16) : Color.clear))
+                    .overlay(Capsule().strokeBorder(tab == t ? p.accent.swiftUIColor.opacity(0.18) : Color.clear,
+                                                    lineWidth: Metrics.hairlineWidth))
+                    .contentShape(Capsule())
                 }
                 .buttonStyle(.plain)
                 .keyboardShortcut(KeyEquivalent(Character("\(i + 1)")), modifiers: .command)
@@ -94,15 +95,24 @@ public struct PanelView: View {
                 .accessibilityAddTraits(tab == t ? .isSelected : [])
             }
             Spacer()
-            Text(Format.stateTitle(model.state, hasApps: model.hasProtectedApps))
-                .font(theme.font(10)).foregroundColor(p.muted.swiftUIColor)
-                .padding(.horizontal, theme.spacing - 4)
-                .fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: theme.smallGap + 1) {
+                StatusDot(color: stateColor(model.state, p))
+                Text(Format.stateTitle(model.state, hasApps: model.hasProtectedApps))
+                    .font(theme.font(11, weight: .medium)).foregroundColor(p.muted.swiftUIColor)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(.horizontal, theme.spacing - 2)
+            .padding(.bottom, theme.smallGap)
         }
         .padding(theme.spacing)
-        .frame(width: 160)
+        .frame(width: 176)
         .frame(maxHeight: .infinity, alignment: .top)
-        .background(p.sidebar.swiftUIColor)
+        .background(
+            ZStack {
+                GlassBackground(material: .sidebar)
+                p.sidebar.swiftUIColor.opacity(theme.isDark ? 0.55 : 0.4)
+            }
+        )
     }
 
     @ViewBuilder private var content: some View {

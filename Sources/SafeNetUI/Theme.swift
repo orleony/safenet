@@ -5,9 +5,15 @@ import Combine
 
 /// Corner radii and other fixed design constants.
 public enum Metrics {
-    public static let cornerRadius: CGFloat = 12
-    public static let smallCornerRadius: CGFloat = 8
+    /// Cards and grouped blocks.
+    public static let cornerRadius: CGFloat = 14
+    /// Text fields, list rows, sidebar items.
+    public static let smallCornerRadius: CGFloat = 9
     public static let hairlineWidth: CGFloat = 1
+    /// Fills of the translucent ("glass") controls, as opacity of the ink colour.
+    public static let neutralFill: Double = 0.075
+    public static let accentFill: Double = 0.22
+    public static let tintStroke: Double = 0.16
 }
 
 /// Live theme resolved from Config and the current system colour scheme.
@@ -84,10 +90,23 @@ public final class Theme: ObservableObject {
     public var padding: CGFloat { spacing + 2 }                       // 10 / 14
     public var rowPadding: CGFloat { (spacing * 0.6).rounded() }     // 5 / 7
 
+    /// Body text: SF Pro (or SF Mono with the "Моноширинный" setting).
     public func font(_ size: CGFloat, weight: Font.Weight = .regular) -> Font {
         switch fontStyle {
         case .system: return .system(size: size, weight: weight)
         case .mono: return .system(size: size, weight: weight, design: .monospaced)
         }
     }
+
+    /// Figures and titles (IP address, countdown, headings): SF Pro Rounded, which echoes the
+    /// capsule controls; SF Mono with the "Моноширинный" setting. Digits are tabular.
+    public func display(_ size: CGFloat, weight: Font.Weight = .semibold) -> Font {
+        switch fontStyle {
+        case .system: return .system(size: size, weight: weight, design: .rounded).monospacedDigit()
+        case .mono: return .system(size: size, weight: weight, design: .monospaced)
+        }
+    }
+
+    /// Whether the resolved palette is the dark one (glass tints differ per scheme).
+    public var isDark: Bool { palette.background.luminance < 0.2 }
 }

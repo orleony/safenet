@@ -10,22 +10,22 @@ struct OverviewTab: View {
     var body: some View {
         let p = theme.palette
         VStack(alignment: .leading, spacing: theme.spacing + 2) {
-            Card {
-                HStack(spacing: theme.spacing - 4) {
-                    Image(systemName: Format.stateSymbol(model.state))
-                        .foregroundColor(stateColor(model.state, p).swiftUIColor).font(.system(size: 16))
-                        .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: theme.spacing) {
+                HStack(spacing: theme.smallGap + 2) {
+                    StatusDot(color: stateColor(model.state, p))
                     Text(Format.stateTitle(model.state, hasApps: model.hasProtectedApps))
-                        .font(theme.font(16, weight: .semibold)).foregroundColor(p.text.swiftUIColor)
+                        .font(theme.display(15)).foregroundColor(p.text.swiftUIColor)
+                    if model.testMode != nil { Badge(text: "Тестовый режим", color: p.frozen) }
                     Spacer()
-                    if model.testMode != nil { Badge(text: "ТЕСТОВЫЙ РЕЖИМ", color: p.frozen) }
                 }
                 ipLine
                 if !expected.isEmpty {
-                    Text("Ожидается: " + expected).font(theme.font(11)).foregroundColor(p.muted.swiftUIColor)
+                    Text("Разрешено: " + expected).font(theme.font(11.5)).foregroundColor(p.muted.swiftUIColor)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
+            .padding(.vertical, theme.smallGap)
+            .background(StateHalo(color: stateColor(model.state, p)))
             ForEach(model.messages, id: \.text) { m in
                 HStack(alignment: .top) {
                     Note(m.text, symbol: m.isError ? "xmark.octagon" : "info.circle", color: m.isError ? p.danger : p.muted)
@@ -48,12 +48,13 @@ struct OverviewTab: View {
                 }
             }
             Card {
-                Text("Проверки").font(theme.font(12, weight: .semibold)).foregroundColor(p.text.swiftUIColor)
+                CardTitle("Проверки")
                 ForEach(lines, id: \.0) { l in
                     HStack(alignment: .firstTextBaseline, spacing: theme.spacing - 4) {
                         LevelIcon(level: l.2)
-                        Text(l.0).font(theme.font(12, weight: .medium)).foregroundColor(p.text.swiftUIColor).frame(width: 150, alignment: .leading)
+                        Text(l.0).font(theme.font(12, weight: .medium)).foregroundColor(p.text.swiftUIColor).frame(width: 140, alignment: .leading)
                         Text(l.1).font(theme.font(12)).foregroundColor(p.muted.swiftUIColor).fixedSize(horizontal: false, vertical: true)
+                        Spacer(minLength: 0)
                     }
                 }
             }
@@ -65,27 +66,24 @@ struct OverviewTab: View {
         let p = theme.palette
         return Group {
             if let a = model.lastIP {
-                HStack(spacing: theme.spacing - 2) {
-                    Text(Format.flag(a.country)).font(.system(size: 32))
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(a.ip).font(theme.font(24, weight: .semibold)).foregroundColor(p.text.swiftUIColor)
-                            .lineLimit(1).minimumScaleFactor(0.6).textSelection(.enabled)
-                        Text(Format.countryName(a.country)).font(theme.font(12)).foregroundColor(p.muted.swiftUIColor)
-                    }
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(a.ip).font(theme.display(38)).foregroundColor(p.text.swiftUIColor)
+                        .lineLimit(1).minimumScaleFactor(0.6).textSelection(.enabled)
+                    NetworkFacts(model: model)
                 }
             } else if let country = model.status.sharedCountry {
-                Text("\(Format.flag(country)) \(Format.countryName(country)) · несколько IP")
-                    .font(theme.font(18, weight: .semibold)).foregroundColor(p.text.swiftUIColor)
+                Text("\(Format.flag(country)) \(Format.countryName(country)), несколько IP")
+                    .font(theme.display(22)).foregroundColor(p.text.swiftUIColor)
             } else {
                 Text(model.snapshot?.online == false ? "Нет сети" : (model.status.lastCheck == nil ? "Проверка…" : "IP не подтверждён"))
-                    .font(theme.font(20, weight: .semibold)).foregroundColor(p.muted.swiftUIColor)
+                    .font(theme.display(26)).foregroundColor(p.muted.swiftUIColor)
             }
         }
     }
 
     private var firstRun: some View {
         Card {
-            Text("Выберите разрешённые страны или IP").font(theme.font(13, weight: .semibold)).foregroundColor(theme.palette.text.swiftUIColor)
+            Text("Выберите разрешённые страны или IP").font(theme.display(15)).foregroundColor(theme.palette.text.swiftUIColor)
             Note("Пока список пуст, выбранные приложения заморожены (но не закрываются), пока вы не укажете разрешённую страну или IP. Сами мы ничего не разрешаем.")
             HStack(spacing: theme.spacing - 4) {
                 if let a = model.lastIP {
@@ -177,19 +175,19 @@ struct PanelFrozenCard: View {
     var body: some View {
         let p = theme.palette
         let col = stateColor(model.state, p)
-        Card {
+        VStack(alignment: .leading, spacing: theme.spacing - 2) {
             Label(Format.reason(reason).prefix(1).uppercased() + String(Format.reason(reason).dropFirst()),
                   systemImage: reason == .freezeFailed ? "xmark.octagon" : "snowflake")
-                .font(theme.font(13, weight: .semibold)).foregroundColor(col.swiftUIColor)
+                .font(theme.display(14)).foregroundColor(col.swiftUIColor)
             if let d = deadline {
                 TimelineView(.periodic(from: Date(), by: 1)) { ctx in
                     let left = d.timeIntervalSince(ctx.date), total = max(1, d.timeIntervalSince(since))
                     VStack(alignment: .leading, spacing: theme.smallGap) {
                         Text("\(model.config.onTimeout == .close ? "Закрытие через" : "Срок заморозки") \(Format.countdown(left))")
-                            .font(theme.font(22, weight: .semibold).monospacedDigit()).foregroundColor(p.text.swiftUIColor)
+                            .font(theme.display(28)).foregroundColor(p.text.swiftUIColor)
                         GeometryReader { g in
                             ZStack(alignment: .leading) {
-                                Capsule().fill(p.hairline.swiftUIColor)
+                                Capsule().fill(p.text.swiftUIColor.opacity(0.09))
                                 Capsule().fill(col.swiftUIColor).frame(width: g.size.width * CGFloat(min(1, max(0, left / total))))
                             }
                         }
@@ -215,5 +213,8 @@ struct PanelFrozenCard: View {
                 Text("Несохранённые данные в них могут пропасть.")
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(theme.padding + 2)
+        .background(TintedGlass(color: col, theme: theme))
     }
 }

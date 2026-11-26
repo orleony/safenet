@@ -35,7 +35,7 @@ struct CheckTab: View {
             if let r = result {
                 ForEach(DeepCheck.sections(r, config: model.config)) { s in
                     Card {
-                        Text(s.title).font(theme.font(12, weight: .semibold)).foregroundColor(p.text.swiftUIColor)
+                        Text(s.title).font(theme.display(13)).foregroundColor(p.text.swiftUIColor)
                         ForEach(s.rows) { row in rowView(row) }
                     }
                 }

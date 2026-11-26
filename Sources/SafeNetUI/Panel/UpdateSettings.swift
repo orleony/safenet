@@ -45,7 +45,7 @@ struct UpdateSettings: View {
         let p = theme.palette
         let c = model.config
         Card {
-            Text("Обновления").font(theme.font(12, weight: .semibold)).foregroundColor(p.text.swiftUIColor)
+            CardTitle("Обновления")
             SettingRow("Новые версии", detail: UpdateText.modeDetail(c.updates)) {
                 Segmented(options: [(UpdateMode.auto, "Ставить сами"), (.notify, "Только сообщать"), (.off, "Выключено")],
                           selection: c.updates) { v in model.update { $0.updates = v } }

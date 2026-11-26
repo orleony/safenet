@@ -14,7 +14,7 @@ struct NetworksTab: View {
             SectionHeader(title: "Доверенные сети",
                           subtitle: "В доверенной сети (дом, офис) VPN не требуется: приложения работают без проверки IP. Все остальные сети под защитой. Сеть опознаётся по MAC-адресу шлюза вместе с его IP и подсетью — одинаковый 192.168.1.1 у чужого роутера доверия не даёт.")
             Card {
-                Text("Текущая сеть").font(theme.font(12, weight: .semibold)).foregroundColor(p.text.swiftUIColor)
+                CardTitle("Текущая сеть")
                 if let s = model.snapshot {
                     Text(currentLine(s)).font(theme.font(12)).foregroundColor(p.muted.swiftUIColor)
                         .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
@@ -34,7 +34,7 @@ struct NetworksTab: View {
                 if let why = trust.reason { Note(why, symbol: "info.circle") }
             }
             Card {
-                Text("Список").font(theme.font(12, weight: .semibold)).foregroundColor(p.text.swiftUIColor)
+                CardTitle("Список")
                 if model.config.trustedNetworks.isEmpty { Note("Доверенных сетей нет — защита действует везде.") }
                 // Keyed by gateway MAC + IP (not the array index): a rename or a hot reload that
                 // reorders the list keeps the row and its editor on the right network.

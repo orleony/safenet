@@ -16,7 +16,7 @@ struct AppearanceSettings: View {
         let current = AccentName(configValue: c.accent)
         let dark = p.background.luminance < 0.2
         Card {
-            Text("Внешний вид").font(theme.font(12, weight: .semibold)).foregroundColor(p.text.swiftUIColor)
+            CardTitle("Внешний вид")
             SettingRow("Тема", detail: c.theme == .system ? "Меняется вместе с системой." : nil) {
                 Segmented(options: [(ThemeChoice.light, "Светлая"), (.dark, "Тёмная"), (.system, "Как в системе")],
                           selection: c.theme) { v in model.update { $0.theme = v } }
@@ -95,7 +95,7 @@ struct SystemSettings: View {
         let p = theme.palette
         VStack(alignment: .leading, spacing: theme.spacing + 2) {
             Card {
-                Text("Система").font(theme.font(12, weight: .semibold)).foregroundColor(p.text.swiftUIColor)
+                CardTitle("Система")
                 SettingRow("Запускать при входе в систему", detail: Autostart.isAvailable ? nil : "Работает только из SafeNet.app.") {
                     Toggle("Запускать при входе в систему", isOn: Binding(get: { model.autostartEnabled }, set: { model.setAutostart($0) }))
                         .toggleStyle(SNSwitchStyle(theme: theme, showLabel: false)).fixedSize()
@@ -116,7 +116,7 @@ struct SystemSettings: View {
             }
             UpdateSettings(model: model)
             Card {
-                Text("О программе").font(theme.font(12, weight: .semibold)).foregroundColor(p.text.swiftUIColor)
+                CardTitle("О программе")
                 Text("SafeNet, версия \(AppState.version)").font(theme.font(12)).foregroundColor(p.text.swiftUIColor)
                 Note("Окно утечки. На события сети (VPN отключился, сменился интерфейс или маршрут) SafeNet реагирует за десятки–сотни миллисекунд. Но если IP меняется «тихо» — например, VPN переключил сервер без смены интерфейса, — это заметит только опрос, то есть в пределах интервала проверки (сейчас \(DurationInput.text(model.config.checkInterval)) с). SafeNet дополняет, а не заменяет kill switch самого VPN: включите и его.")
                 Note("Приватность. Наружу уходят только запросы к IP-сервисам (каждые 5 с — Cloudflare 1.1.1.1 и api.country.is; полная проверка с ipinfo.io, ipapi.co, ifconfig.co, v6.ident.me — при смене сети, по кнопке и раз в 10 минут) и к /cdn-cgi/trace пяти ИИ-сервисов. Если обновления не выключены, раз в сутки — к github.com за описанием новой версии (и за архивом, когда она есть). Никакой телеметрии и аналитики; настройки и журнал остаются на этом Mac.")

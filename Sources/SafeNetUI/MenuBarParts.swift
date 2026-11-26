@@ -8,47 +8,79 @@ struct SNButtonStyle: ButtonStyle {
     let theme: Theme
 
     func makeBody(configuration: Configuration) -> some View {
+        GlassButton(kind: kind, theme: theme, configuration: configuration)
+    }
+}
+
+/// Capsule button with a translucent tint over the window's glass: accent (primary), ink
+/// (secondary) or red (danger). Brightens on hover, deepens while pressed, fades when disabled.
+private struct GlassButton: View {
+    let kind: SNButtonStyle.Kind
+    let theme: Theme
+    let configuration: ButtonStyleConfiguration
+    @State private var hover = false
+    @Environment(\.isEnabled) private var enabled
+
+    var body: some View {
         let p = theme.palette
-        let fill: Color, ink: Color
+        let tint: RGB, ink: RGB, base: Double
         switch kind {
-        case .primary: fill = p.accent.swiftUIColor; ink = p.onAccent.swiftUIColor
-        case .secondary: fill = p.surface.swiftUIColor; ink = p.text.swiftUIColor
-        case .danger: fill = p.surface.swiftUIColor; ink = p.danger.swiftUIColor
+        case .primary: tint = p.accent; ink = p.accent; base = Metrics.accentFill
+        case .secondary: tint = p.text; ink = p.text; base = Metrics.neutralFill
+        case .danger: tint = p.danger; ink = p.danger; base = Metrics.neutralFill * 1.8
         }
+        let boost = configuration.isPressed ? 1.7 : (hover && enabled ? 1.35 : 1)
         return configuration.label
             .font(theme.font(12, weight: .semibold))
             .lineLimit(1)
-            .minimumScaleFactor(0.9)
-            .foregroundColor(ink)
+            .minimumScaleFactor(0.85)
+            .foregroundColor(ink.swiftUIColor)
             .frame(maxWidth: .infinity)
-            .padding(.vertical, theme.rowPadding)
-            .padding(.horizontal, theme.smallGap)
-            .background(RoundedRectangle(cornerRadius: Metrics.smallCornerRadius).fill(fill))
-            .overlay(RoundedRectangle(cornerRadius: Metrics.smallCornerRadius)
-                .stroke(p.hairline.swiftUIColor, lineWidth: kind == .primary ? 0 : Metrics.hairlineWidth))
-            .opacity(configuration.isPressed ? 0.75 : 1)
-            .contentShape(Rectangle())
+            .padding(.vertical, theme.rowPadding + 1)
+            .padding(.horizontal, theme.spacing)
+            .background(Capsule().fill(tint.swiftUIColor.opacity(min(0.6, base * boost))))
+            .overlay(Capsule().strokeBorder(tint.swiftUIColor.opacity(Metrics.tintStroke + (hover && enabled ? 0.08 : 0)),
+                                            lineWidth: Metrics.hairlineWidth))
+            .opacity(enabled ? 1 : 0.42)
+            .scaleEffect(configuration.isPressed ? 0.98 : 1)
+            .animation(.easeOut(duration: 0.12), value: hover)
+            .animation(.easeOut(duration: 0.08), value: configuration.isPressed)
+            .contentShape(Capsule())
+            .onHover { hover = $0 }
     }
+}
+
+/// Behind-window blur (NSVisualEffectView): the menu window and the panel sidebar sit on it.
+struct GlassBackground: NSViewRepresentable {
+    var material: NSVisualEffectView.Material = .popover
+    func makeNSView(context: Context) -> NSVisualEffectView {
+        let v = NSVisualEffectView()
+        v.material = material
+        v.blendingMode = .behindWindow
+        v.state = .followsWindowActiveState
+        return v
+    }
+    func updateNSView(_ v: NSVisualEffectView, context: Context) { v.material = material }
 }
 
 struct Hairline: View {
     @EnvironmentObject var theme: Theme
     var body: some View {
-        Rectangle().fill(theme.palette.hairline.swiftUIColor).frame(height: Metrics.hairlineWidth)
+        Rectangle().fill(theme.palette.text.swiftUIColor.opacity(theme.isDark ? 0.09 : 0.08)).frame(height: Metrics.hairlineWidth)
     }
 }
 
-/// Small rounded label ("ТЕСТОВЫЙ РЕЖИМ", app state badges).
+/// Small capsule label (test mode, app state badges): tinted fill, sentence case.
 struct Badge: View {
     @EnvironmentObject var theme: Theme
     let text: String
     let color: RGB
     var body: some View {
         Text(text)
-            .font(theme.font(9, weight: .bold))
+            .font(theme.font(10, weight: .semibold))
             .foregroundColor(color.swiftUIColor)
-            .padding(.horizontal, 5).padding(.vertical, 2)
-            .background(RoundedRectangle(cornerRadius: 4).stroke(color.swiftUIColor, lineWidth: Metrics.hairlineWidth))
+            .padding(.horizontal, 7).padding(.vertical, 2.5)
+            .background(Capsule().fill(color.swiftUIColor.opacity(0.14)))
             .lineLimit(1)
     }
 }
@@ -109,12 +141,12 @@ struct AppRow: View {
     private var badge: (String, RGB)? {
         let p = theme.palette, s = model.status
         guard AppCatalog.appIDs(in: model.config).contains(id) else { return nil }
-        if s.unprotectableApps.contains(id) { return ("СИСТЕМНОЕ — НЕ ЗАЩИЩАЕТСЯ", p.danger) }
-        if s.freezeFailedApps.contains(id) { return ("НЕ ЗАМОРОЖЕНО", p.danger) }
-        if s.notRunningApps.contains(id) { return ("НЕ ЗАПУЩЕНО", p.muted) }
-        if s.frozenApps.contains(id) { return ("ЗАМОРОЖЕНО", p.frozen) }
-        if s.releasedApps.contains(id) { return ("ОТПУЩЕНО", p.muted) }
-        if s.closedApps.contains(id) { return ("ЗАКРЫТО", p.danger) }
+        if s.unprotectableApps.contains(id) { return ("Системное, не защищается", p.danger) }
+        if s.freezeFailedApps.contains(id) { return ("Не заморожено", p.danger) }
+        if s.notRunningApps.contains(id) { return ("Не запущено", p.muted) }
+        if s.frozenApps.contains(id) { return ("Заморожено", p.frozen) }
+        if s.releasedApps.contains(id) { return ("Отпущено", p.muted) }
+        if s.closedApps.contains(id) { return ("Закрыто", p.danger) }
         return nil
     }
 }
@@ -137,7 +169,7 @@ struct FrozenCard: View {
             if let d = deadline {
                 TimelineView(.periodic(from: Date(), by: 1)) { ctx in
                     Text("\(model.config.onTimeout == .close ? "Закрытие через" : "Срок заморозки") \(Format.countdown(d.timeIntervalSince(ctx.date)))")
-                        .font(theme.font(18, weight: .semibold).monospacedDigit())
+                        .font(theme.display(20))
                         .foregroundColor(p.text.swiftUIColor)
                 }
             } else {
@@ -161,8 +193,20 @@ struct FrozenCard: View {
                 .buttonStyle(SNButtonStyle(kind: .danger, theme: theme))
             }
         }
-        .padding(theme.spacing - 2)
-        .background(RoundedRectangle(cornerRadius: Metrics.cornerRadius).fill(p.surface.swiftUIColor))
+        .padding(theme.spacing)
+        .background(TintedGlass(color: stateColor(model.state, p), theme: theme))
+    }
+}
+
+/// Card tinted with a state colour (frozen, first run): faint fill, faint edge.
+struct TintedGlass: View {
+    let color: RGB
+    let theme: Theme
+    var body: some View {
+        RoundedRectangle(cornerRadius: Metrics.cornerRadius, style: .continuous)
+            .fill(color.swiftUIColor.opacity(theme.isDark ? 0.10 : 0.08))
+            .overlay(RoundedRectangle(cornerRadius: Metrics.cornerRadius, style: .continuous)
+                .strokeBorder(color.swiftUIColor.opacity(0.18), lineWidth: Metrics.hairlineWidth))
     }
 }
 
@@ -187,7 +231,7 @@ struct FirstRunCard: View {
             Button("Открыть панель") { openPanel() }
                 .buttonStyle(SNButtonStyle(kind: .secondary, theme: theme))
         }
-        .padding(theme.spacing - 2)
-        .background(RoundedRectangle(cornerRadius: Metrics.cornerRadius).fill(p.surface.swiftUIColor))
+        .padding(theme.spacing)
+        .background(TintedGlass(color: p.accent, theme: theme))
     }
 }

@@ -74,7 +74,8 @@ enum PanelOpener {
     }
 }
 
-/// Rounded surface card with a hairline border.
+/// Glass card: a faint ink tint and an almost invisible edge, so blocks read as layers of the
+/// window rather than boxes.
 struct Card<Content: View>: View {
     @EnvironmentObject var theme: Theme
     let content: Content
@@ -82,10 +83,30 @@ struct Card<Content: View>: View {
     var body: some View {
         VStack(alignment: .leading, spacing: theme.spacing - 2) { content }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(theme.padding)
-            .background(RoundedRectangle(cornerRadius: Metrics.cornerRadius).fill(theme.palette.surface.swiftUIColor))
-            .overlay(RoundedRectangle(cornerRadius: Metrics.cornerRadius)
-                .stroke(theme.palette.hairline.swiftUIColor, lineWidth: Metrics.hairlineWidth))
+            .padding(theme.padding + 2)
+            .background(GlassCardShape(theme: theme))
+    }
+}
+
+struct GlassCardShape: View {
+    let theme: Theme
+    var body: some View {
+        let ink = theme.palette.text.swiftUIColor
+        RoundedRectangle(cornerRadius: Metrics.cornerRadius, style: .continuous)
+            .fill(ink.opacity(theme.isDark ? 0.05 : 0.035))
+            .overlay(RoundedRectangle(cornerRadius: Metrics.cornerRadius, style: .continuous)
+                .strokeBorder(ink.opacity(theme.isDark ? 0.08 : 0.07), lineWidth: Metrics.hairlineWidth))
+    }
+}
+
+/// Title of a card ("Проверки", "Обновления").
+struct CardTitle: View {
+    @EnvironmentObject var theme: Theme
+    let text: String
+    init(_ text: String) { self.text = text }
+    var body: some View {
+        Text(text).font(theme.display(13)).foregroundColor(theme.palette.text.swiftUIColor)
+            .accessibilityAddTraits(.isHeader)
     }
 }
 
@@ -95,12 +116,14 @@ struct SectionHeader: View {
     let title: String
     var subtitle: String?
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(title).font(theme.font(14, weight: .semibold)).foregroundColor(theme.palette.text.swiftUIColor)
+        VStack(alignment: .leading, spacing: 5) {
+            Text(title).font(theme.display(22)).foregroundColor(theme.palette.text.swiftUIColor)
                 .accessibilityAddTraits(.isHeader)
             if let s = subtitle {
-                Text(s).font(theme.font(11)).foregroundColor(theme.palette.muted.swiftUIColor)
+                Text(s).font(theme.font(12)).foregroundColor(theme.palette.muted.swiftUIColor)
+                    .lineSpacing(2)
                     .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: 560, alignment: .leading)   // a readable line, not the whole column
             }
         }
     }
@@ -138,10 +161,12 @@ struct Chip: View {
             }
             .fixedSize()
             .font(theme.font(11, weight: .medium))
-            .foregroundColor((selected ? p.onAccent : p.text).swiftUIColor)
+            .foregroundColor((selected ? p.accent : p.text).swiftUIColor)
             .padding(.horizontal, theme.spacing - 2).padding(.vertical, theme.smallGap)
-            .background(Capsule().fill((selected ? p.accent : p.surface).swiftUIColor))
-            .overlay(Capsule().stroke(p.hairline.swiftUIColor, lineWidth: selected ? 0 : Metrics.hairlineWidth))
+            .background(Capsule().fill(selected ? p.accent.swiftUIColor.opacity(Metrics.accentFill)
+                                                : p.text.swiftUIColor.opacity(Metrics.neutralFill)))
+            .overlay(Capsule().strokeBorder((selected ? p.accent : p.text).swiftUIColor.opacity(Metrics.tintStroke),
+                                            lineWidth: Metrics.hairlineWidth))
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)
@@ -164,20 +189,20 @@ struct Segmented<T: Hashable>: View {
                 let on = opt.0 == selection
                 Button { onSelect(opt.0) } label: {
                     Text(opt.1)
-                        .font(theme.font(11, weight: on ? .semibold : .regular))
-                        .foregroundColor((on ? p.onAccent : p.text).swiftUIColor)
+                        .font(theme.font(11, weight: on ? .semibold : .medium))
+                        .foregroundColor((on ? p.accent : p.muted).swiftUIColor)
                         .lineLimit(1)
-                        .padding(.horizontal, theme.spacing - 2).padding(.vertical, theme.smallGap)
-                        .background(RoundedRectangle(cornerRadius: 6).fill(on ? p.accent.swiftUIColor : Color.clear))
-                        .contentShape(Rectangle())
+                        .padding(.horizontal, theme.spacing - 1).padding(.vertical, theme.smallGap + 1)
+                        .background(Capsule().fill(on ? p.accent.swiftUIColor.opacity(Metrics.accentFill) : Color.clear))
+                        .contentShape(Capsule())
                 }
                 .buttonStyle(.plain)
                 .accessibilityAddTraits(on ? .isSelected : [])
             }
         }
         .padding(2)
-        .background(RoundedRectangle(cornerRadius: 8).fill(p.background.swiftUIColor))
-        .overlay(RoundedRectangle(cornerRadius: 8).stroke(p.hairline.swiftUIColor, lineWidth: Metrics.hairlineWidth))
+        .background(Capsule().fill(p.text.swiftUIColor.opacity(Metrics.neutralFill * 0.8)))
+        .overlay(Capsule().strokeBorder(p.text.swiftUIColor.opacity(0.06), lineWidth: Metrics.hairlineWidth))
         .fixedSize()
     }
 }
@@ -197,7 +222,8 @@ struct SNSwitchStyle: ToggleStyle {
                     Spacer(minLength: theme.smallGap)
                 }
                 ZStack(alignment: on ? .trailing : .leading) {
-                    Capsule().fill((on ? p.accent : p.hairline).swiftUIColor).frame(width: 30, height: 18)
+                    Capsule().fill(on ? p.accent.swiftUIColor.opacity(0.85) : p.text.swiftUIColor.opacity(0.16))
+                        .frame(width: 32, height: 19)
                     // White knob with a hairline and a soft shadow: readable on every accent
                     // (onAccent is black on light accents such as orange).
                     Circle().fill(Color.white).frame(width: 14, height: 14)
@@ -264,10 +290,12 @@ struct ValidatedField: View {
                     .textFieldStyle(.plain)
                     .font(theme.font(12))
                     .foregroundColor(p.text.swiftUIColor)
-                    .padding(.horizontal, theme.spacing - 4).padding(.vertical, theme.rowPadding)
-                    .background(RoundedRectangle(cornerRadius: Metrics.smallCornerRadius).fill(p.background.swiftUIColor))
-                    .overlay(RoundedRectangle(cornerRadius: Metrics.smallCornerRadius)
-                        .stroke((showError && check.error != nil ? p.danger : p.hairline).swiftUIColor, lineWidth: Metrics.hairlineWidth))
+                    .padding(.horizontal, theme.spacing - 2).padding(.vertical, theme.rowPadding + 1)
+                    .background(RoundedRectangle(cornerRadius: Metrics.smallCornerRadius, style: .continuous)
+                        .fill(p.text.swiftUIColor.opacity(Metrics.neutralFill * 0.8)))
+                    .overlay(RoundedRectangle(cornerRadius: Metrics.smallCornerRadius, style: .continuous)
+                        .strokeBorder(showError && check.error != nil ? p.danger.swiftUIColor : p.text.swiftUIColor.opacity(0.1),
+                                      lineWidth: Metrics.hairlineWidth))
                     .frame(maxWidth: width ?? .infinity)
                     .accessibilityLabel(label)
                     .onSubmit(apply)
@@ -275,7 +303,6 @@ struct ValidatedField: View {
                     .buttonStyle(SNButtonStyle(kind: .primary, theme: theme))
                     .fixedSize()
                     .disabled(check.value == nil || text == initial)
-                    .opacity(check.value == nil || text == initial ? 0.5 : 1)
             }
             if showError, let e = check.error {
                 Note(e, symbol: "xmark.octagon", color: p.danger)

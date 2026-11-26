@@ -54,7 +54,7 @@ struct AppsTab: View {
         let p = theme.palette
         return Card {
             HStack {
-                Text("Свои приложения").font(theme.font(12, weight: .semibold)).foregroundColor(p.text.swiftUIColor)
+                CardTitle("Свои приложения")
                 Spacer()
                 if !addingCustom {
                     Button("Добавить") { addingCustom = true; editingCustom = nil }

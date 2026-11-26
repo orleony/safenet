@@ -11,17 +11,21 @@ public struct MenuBarView: View {
     public init(model: AppState) { self.model = model }
 
     public var body: some View {
-        VStack(alignment: .leading, spacing: theme.spacing) {
+        VStack(alignment: .leading, spacing: theme.spacing + 2) {
             header
                 .onAppear { PanelOpener.register(openWindow) }
             ipBlock
             notices
-            Hairline()
             buttons
         }
-        .padding(theme.padding + 6)
-        .frame(width: 310)
-        .background(theme.palette.background.swiftUIColor)
+        .padding(theme.padding + 4)
+        .frame(width: 300)
+        .background(
+            ZStack {
+                GlassBackground(material: .popover)
+                theme.palette.background.swiftUIColor.opacity(theme.isDark ? 0.55 : 0.45)
+            }
+        )
     }
 
     // MARK: Sections
@@ -71,12 +75,22 @@ public struct MenuBarView: View {
     private var header: some View {
         let p = theme.palette
         return HStack(spacing: theme.smallGap) {
-            Circle().fill(stateColor(model.state, p).swiftUIColor).frame(width: 8, height: 8)
-            Text(Format.stateTitle(model.state, hasApps: model.hasProtectedApps))
-                .font(theme.font(13, weight: .semibold)).foregroundColor(p.text.swiftUIColor)
+            StatusDot(color: stateColor(model.state, p))
+            if case .paused(let until?) = model.state {
+                TimelineView(.periodic(from: Date(), by: 1)) { ctx in
+                    Text("Пауза, ещё \(Format.countdown(until.timeIntervalSince(ctx.date)))")
+                        .font(theme.display(13)).foregroundColor(p.text.swiftUIColor)
+                }
+            } else {
+                Text(Format.stateTitle(model.state, hasApps: model.hasProtectedApps))
+                    .font(theme.display(13)).foregroundColor(p.text.swiftUIColor)
+            }
+            if model.testMode != nil { Badge(text: "Тест", color: p.frozen) }
             Spacer(minLength: 4)
             Button(action: model.quit) {
-                Image(systemName: "power").frame(width: 24, height: 24)
+                Image(systemName: "power").font(.system(size: 11, weight: .semibold))
+                    .frame(width: 24, height: 24)
+                    .background(Circle().fill(p.text.swiftUIColor.opacity(Metrics.neutralFill)))
             }
             .buttonStyle(.plain)
             .foregroundColor(p.muted.swiftUIColor)
@@ -87,32 +101,30 @@ public struct MenuBarView: View {
 
     private var ipBlock: some View {
         let p = theme.palette
-        return VStack(alignment: .leading, spacing: theme.smallGap / 2) {
+        return VStack(alignment: .leading, spacing: theme.smallGap + 2) {
             if let a = model.lastIP {
                 Text(a.ip)
-                    .font(theme.font(26, weight: .medium)).monospacedDigit()
+                    .font(theme.display(30))
                     .foregroundColor(p.text.swiftUIColor)
                     .lineLimit(1).minimumScaleFactor(0.55).textSelection(.enabled)
             } else if let country = model.status.sharedCountry {
-                Text("\(Format.flag(country)) \(country) · несколько IP")
-                    .font(theme.font(15, weight: .semibold)).foregroundColor(p.text.swiftUIColor)
+                Text("\(Format.flag(country)) \(Format.countryName(country)), несколько IP")
+                    .font(theme.display(17)).foregroundColor(p.text.swiftUIColor)
             } else {
                 Text(model.status.snapshot?.online == false ? "Нет сети" : (model.status.lastCheck == nil ? "Проверка…" : "IP не подтверждён"))
-                    .font(theme.font(18, weight: .semibold)).foregroundColor(p.muted.swiftUIColor)
+                    .font(theme.display(20)).foregroundColor(p.muted.swiftUIColor)
             }
-            Text(networkLine).font(theme.font(11)).foregroundColor(p.muted.swiftUIColor).lineLimit(2)
+            NetworkFacts(model: model)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, theme.smallGap)
+        .background(StateHalo(color: stateColor(model.state, p)))
     }
 
     private var buttons: some View {
         HStack(spacing: theme.spacing - 4) {
-            if case .paused(let until?) = model.state {
-                TimelineView(.periodic(from: Date(), by: 1)) { ctx in
-                    Button("Возобновить · \(Format.countdown(until.timeIntervalSince(ctx.date)))") { model.resumeProtection() }
-                        .buttonStyle(SNButtonStyle(kind: .secondary, theme: theme))
-                }
-            } else if case .paused = model.state {
-                Button("Возобновить защиту") { model.resumeProtection() }
+            if case .paused = model.state {
+                Button("Возобновить") { model.resumeProtection() }
                     .buttonStyle(SNButtonStyle(kind: .secondary, theme: theme))
             } else {
                 Menu {
@@ -128,10 +140,10 @@ public struct MenuBarView: View {
                 .menuIndicator(.hidden)
                 .fixedSize()
                 .frame(maxWidth: .infinity)
-                .padding(.vertical, theme.rowPadding)
-                .background(RoundedRectangle(cornerRadius: Metrics.smallCornerRadius).fill(theme.palette.surface.swiftUIColor))
-                .overlay(RoundedRectangle(cornerRadius: Metrics.smallCornerRadius)
-                    .stroke(theme.palette.hairline.swiftUIColor, lineWidth: Metrics.hairlineWidth))
+                .padding(.vertical, theme.rowPadding + 1)
+                .background(Capsule().fill(theme.palette.text.swiftUIColor.opacity(Metrics.neutralFill)))
+                .overlay(Capsule().strokeBorder(theme.palette.text.swiftUIColor.opacity(Metrics.tintStroke),
+                                                lineWidth: Metrics.hairlineWidth))
             }
             Button("Открыть панель") { openPanel() }
                 .buttonStyle(SNButtonStyle(kind: .primary, theme: theme))
@@ -139,17 +151,6 @@ public struct MenuBarView: View {
     }
 
     // MARK: Text
-
-    /// "Нидерланды · VPN: активен · IPv6 чисто"
-    private var networkLine: String {
-        var parts: [String] = []
-        if let a = model.lastIP { parts.append(Format.countryName(a.country)) }
-        if let s = model.snapshot { parts.append(s.hasTunnel ? "VPN: активен" : "VPN: нет") }
-        if model.config.checkIPv6 {
-            parts.append(model.status.observation?.ipv6Leak == true ? "утечка IPv6" : "IPv6 чисто")
-        }
-        return parts.joined(separator: " · ")
-    }
 
     private var warnings: [String] {
         var w: [String] = []
@@ -162,4 +163,65 @@ public struct MenuBarView: View {
     }
 
     private func openPanel() { PanelOpener.open(openWindow) }
+}
+
+/// Country, tunnel and IPv6 under the IP: three small facts, each with its own symbol.
+struct NetworkFacts: View {
+    @ObservedObject var model: AppState
+    @EnvironmentObject var theme: Theme
+
+    var body: some View {
+        let p = theme.palette
+        HStack(spacing: theme.spacing) {
+            if let a = model.lastIP {
+                fact(Text(Format.flag(a.country)), Format.countryName(a.country), p.muted)
+            }
+            if let s = model.snapshot {
+                fact(Image(systemName: s.hasTunnel ? "lock.fill" : "lock.open"), s.hasTunnel ? "VPN" : "Без VPN",
+                     s.hasTunnel ? p.muted : p.frozen)
+            }
+            if model.config.checkIPv6 {
+                let leak = model.status.observation?.ipv6Leak == true
+                fact(Image(systemName: leak ? "exclamationmark.triangle.fill" : "checkmark"), leak ? "Утечка IPv6" : "IPv6",
+                     leak ? p.danger : p.muted)
+            }
+        }
+        .font(theme.font(11, weight: .medium))
+        .lineLimit(1)
+    }
+
+    private func fact<I: View>(_ icon: I, _ text: String, _ color: RGB) -> some View {
+        HStack(spacing: 4) {
+            icon.font(.system(size: 10, weight: .semibold))
+            Text(text)
+        }
+        .foregroundColor(color.swiftUIColor)
+    }
+}
+
+/// State dot with a soft glow of the same colour.
+struct StatusDot: View {
+    let color: RGB
+    var body: some View {
+        Circle().fill(color.swiftUIColor).frame(width: 8, height: 8)
+            .background(Circle().fill(RadialGradient(colors: [color.swiftUIColor.opacity(0.45), color.swiftUIColor.opacity(0)],
+                                                     center: .center, startRadius: 3, endRadius: 9))
+                .frame(width: 18, height: 18))
+            .accessibilityHidden(true)
+    }
+}
+
+/// The one loud element: a soft wash of the state colour behind the IP address. An elliptical
+/// gradient that reaches zero at its own edge, so it never shows a border.
+struct StateHalo: View {
+    let color: RGB
+    var body: some View {
+        EllipticalGradient(stops: [.init(color: color.swiftUIColor.opacity(0.24), location: 0),
+                                   .init(color: color.swiftUIColor.opacity(0.10), location: 0.45),
+                                   .init(color: color.swiftUIColor.opacity(0), location: 1)],
+                           center: UnitPoint(x: 0.3, y: 0.5), startRadiusFraction: 0, endRadiusFraction: 0.5)
+            .padding(.horizontal, -40).padding(.vertical, -30)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+    }
 }

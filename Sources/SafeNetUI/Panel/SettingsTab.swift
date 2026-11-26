@@ -17,7 +17,7 @@ struct SettingsTab: View {
             SectionHeader(title: "Настройки", subtitle: "Всё сохраняется в config.yaml; правки файла вручную сразу появляются здесь.")
             if model.configReadOnly { Note(LiveSystem.readOnlyMessage, symbol: "info.circle", color: p.frozen) }
             Card {
-                Text("Заморозка и закрытие").font(theme.font(12, weight: .semibold)).foregroundColor(p.text.swiftUIColor)
+                CardTitle("Заморозка и закрытие")
                 durationRow("Время заморозки", "Сколько ждать правильный IP, прежде чем выполнить действие ниже (\(DurationInput.text(DurationInput.graceRange.lowerBound))–\(DurationInput.text(DurationInput.graceRange.upperBound)) с).",
                             c.grace, DurationInput.graceRange) { v in model.update { $0.grace = v } }
                 SettingRow("Когда время вышло", detail: timeoutDetail(c.onTimeout)) {
@@ -39,7 +39,7 @@ struct SettingsTab: View {
                 }
             }
             Card {
-                Text("Проверки").font(theme.font(12, weight: .semibold)).foregroundColor(p.text.swiftUIColor)
+                CardTitle("Проверки")
                 durationRow("Интервал проверки", "Опрос IP по таймеру в дополнение к системным событиям сети (1–300 с).",
                             c.checkInterval, 1...300) { v in model.update { $0.checkInterval = v } }
                 SettingRow("Сколько сервисов должны совпасть",

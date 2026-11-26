@@ -93,7 +93,7 @@ struct JournalTab: View {
         Card {
             HStack(spacing: theme.smallGap) {
                 Image(systemName: symbol).foregroundColor(c.swiftUIColor).accessibilityHidden(true)
-                Text(value).font(theme.font(22, weight: .semibold).monospacedDigit()).foregroundColor(theme.palette.text.swiftUIColor)
+                Text(value).font(theme.display(26)).foregroundColor(theme.palette.text.swiftUIColor)
             }
             Text(title).font(theme.font(11)).foregroundColor(theme.palette.muted.swiftUIColor).lineLimit(2)
         }

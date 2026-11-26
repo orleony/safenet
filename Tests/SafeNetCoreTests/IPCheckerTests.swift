@@ -167,10 +167,25 @@ func registerIPCheckerTests() {
         expectEqual(TraceIPService.cloudflare.url.absoluteString, "https://1.1.1.1/cdn-cgi/trace")
         expectEqual(TraceIPService(url: TraceIPService.cloudflare.url).name, "1.1.1.1")
     }
-    test("testCheapServicesAreTraceAndCountryIs") {
-        expectEqual(IPServiceSet.cheapHosts, ["1.1.1.1", "api.country.is"])
-        expect(!IPServiceSet.quotaLimitedSpecs.map { $0.url.host ?? "" }.contains("api.country.is"))
-        expectEqual(Set(IPServiceSet.quotaLimitedSpecs.compactMap { $0.url.host }), ["ipinfo.io", "ipapi.co", "ifconfig.co"])
+    test("testAddressServicesAreTextAndCloudflareByName") {
+        expectEqual(IPServiceSet.cheapHosts, ["www.cloudflare.com", "api.ipify.org"])
+        expectEqual(IPServiceSet.ipv4Hosts, ["www.cloudflare.com", "api.ipify.org", "checkip.amazonaws.com", "ipv4.icanhazip.com", "v4.ident.me"])
+        expect(!IPServiceSet.ipv4Hosts.contains("1.1.1.1"), "VPNs often route 1.1.1.1 around the tunnel")
+        expectEqual(IPServiceSet.makeServices().map { $0.name }, IPServiceSet.ipv4Hosts)
+        expect(Set(IPServiceSet.cheapHosts).isSubset(of: Set(IPServiceSet.ipv4Hosts)))
+    }
+    test("testTextServiceInterpretation") {
+        expectEqual(try? TextIPService.interpret(status: 200, body: " 195.133.9.79\n"), IPAnswer(ip: "195.133.9.79", country: ""))
+        expectEqual(try? TextIPService.interpret(status: 200, body: "<html>"), nil)
+        do { _ = try TextIPService.interpret(status: 429, body: ""); expect(false, "429 must throw") }
+        catch let e as HTTPIPService.ServiceError { expectEqual(e, .rateLimited) }
+        catch { expect(false, "wrong error \(error)") }
+    }
+    test("testAddressOnlyDropsCountry") {
+        let s = AddressOnly(FakeIPService(answer: IPAnswer(ip: "1.2.3.4", country: "NL"), name: "x"))
+        let r: IPAnswer? = awaitResult { () async -> IPAnswer? in do { return try await s.fetch() } catch { return nil } }
+        expectEqual(r, IPAnswer(ip: "1.2.3.4", country: ""))
+        expectEqual(s.name, "x")
     }
     test("testHTTPStatusInterpretation") {
         let ok = Data(#"{"ip":"1.2.3.4","country":"NL"}"#.utf8)

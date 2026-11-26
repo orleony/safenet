@@ -13,6 +13,9 @@ public enum CLIStatusText {
         }
         if let c = s.confirmed {
             lines.append("IP: \(c.ip) (\(c.country.isEmpty ? "страна неизвестна" : c.country.uppercased()))")
+            if !s.splitIPs.isEmpty {
+                lines.append("Раздельная маршрутизация: часть сервисов видит \(s.splitIPs.joined(separator: ", "))")
+            }
         } else if let country = s.sharedCountry {
             lines.append("IP: несколько выходных адресов (\(country))")
         } else if s.answers.isEmpty {

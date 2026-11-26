@@ -331,15 +331,73 @@ public struct TraceIPService: IPService {
     }
 }
 
-/// Which services are asked when (spec ruling R1, "tiered polling"):
-///  - CHEAP (periodic tick every `check_interval`): Cloudflare trace on 1.1.1.1 + api.country.is;
-///  - FULL fan-out (start, network change, wake, manual check, any doubt, every 10 min):
-///    cheap + the quota-limited ipinfo.io / ipapi.co / ifconfig.co + the IPv6-only service.
+/// Address only: services that return the caller's public IP as plain text (no country, no
+/// quota worth mentioning). The country is decided separately (`GeoResolver`), once per address.
+/// Body capped at 256 bytes, redirects refused.
+public struct TextIPService: IPService {
+    public let url: URL
+    public let requestTimeout: TimeInterval
+    public var name: String { url.host ?? "IP-сервис" }
+    private let session: URLSession
+
+    public init(url: URL, requestTimeout: TimeInterval = 5) {
+        self.url = url; self.requestTimeout = requestTimeout
+        session = makeEphemeralSession(timeout: requestTimeout, accept: "text/plain")
+    }
+
+    public func fetch() async throws -> IPAnswer {
+        var req = URLRequest(url: url)
+        req.timeoutInterval = requestTimeout
+        let (bytes, resp) = try await session.bytes(for: req, delegate: NoRedirectDelegate())
+        guard let http = resp as? HTTPURLResponse else { throw HTTPIPService.ServiceError.badResponse }
+        var data = Data()
+        for try await b in bytes {
+            data.append(b)
+            if data.count >= 256 { break }
+        }
+        return try TextIPService.interpret(status: http.statusCode, body: String(decoding: data, as: UTF8.self))
+    }
+
+    /// Pure: a bare IP address (whitespace around it allowed). Country left empty.
+    public static func interpret(status: Int, body: String) throws -> IPAnswer {
+        if status == 429 { throw HTTPIPService.ServiceError.rateLimited }
+        guard (200..<300).contains(status) else { throw HTTPIPService.ServiceError.httpStatus(status) }
+        let ip = body.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard HTTPIPService.isValidIP(ip) else { throw HTTPIPService.ServiceError.badResponse }
+        return IPAnswer(ip: ip, country: "")
+    }
+}
+
+/// Keeps a service's address and drops its country (the trace's `loc` is Cloudflare's own
+/// guess; the country comes from `GeoResolver` only).
+public struct AddressOnly: IPService {
+    public let inner: IPService
+    public init(_ inner: IPService) { self.inner = inner }
+    public var name: String { inner.name }
+    public func fetch() async throws -> IPAnswer { IPAnswer(ip: try await inner.fetch().ip, country: "") }
+}
+
+/// IPv4 address services (the quorum; `min_agree` counts their answers) and when they are asked:
+///  - CHEAP (periodic tick every `check_interval`): Cloudflare trace by name + api.ipify.org;
+///  - FULL fan-out (start, network change, wake, manual check, any doubt, every 10 min): all of
+///    them + the IPv6-only service.
+/// 1.1.1.1 is not used: VPN clients often route that literal address around the tunnel.
 public enum IPServiceSet {
-    public static let cheapHosts = ["1.1.1.1", "api.country.is"]
-    public static let countryIs = HTTPIPService.defaults[3]
-    public static let quotaLimitedSpecs = Array(HTTPIPService.defaults.prefix(3))
-    public static var ipv4Hosts: [String] { cheapHosts + quotaLimitedSpecs.compactMap { $0.url.host } }
+    public static let cloudflareTrace = URL(string: "https://www.cloudflare.com/cdn-cgi/trace")!
+    public static let textURLs: [URL] = [
+        URL(string: "https://api.ipify.org")!,
+        URL(string: "https://checkip.amazonaws.com")!,
+        URL(string: "https://ipv4.icanhazip.com")!,
+        URL(string: "https://v4.ident.me")!,
+    ]
+    public static let cheapHosts = ["www.cloudflare.com", "api.ipify.org"]
+    public static var ipv4Hosts: [String] { [cloudflareTrace.host!] + textURLs.compactMap { $0.host } }
+    /// Names used in config.yaml before 1.0.6 (IP + country services); replaced on load.
+    public static let legacyHosts: Set<String> = ["1.1.1.1", "api.country.is", "ipinfo.io", "ipapi.co", "ifconfig.co"]
+    /// Address services built once (each owns a URLSession), in `ipv4Hosts` order.
+    public static func makeServices() -> [IPService] {
+        [AddressOnly(TraceIPService(url: cloudflareTrace))] + textURLs.map { TextIPService(url: $0) }
+    }
 }
 
 /// Mode of one engine check (see `IPServiceSet`).

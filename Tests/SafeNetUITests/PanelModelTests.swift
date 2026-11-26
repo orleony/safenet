@@ -199,7 +199,7 @@ func registerPanelModelTests() {
         let data = DeepCheckData(services: [ru, ru], ipv6: nil, routes: [], resolvers: nil, snapshot: snap, finished: Date())
         let row = DeepCheck.sections(data, config: c).flatMap { $0.rows }.first { $0.id == "svc-summary" }
         expectEqual(row?.level, .fail, "confirmed but not allowed is not green")
-        expect(row?.detail.contains("не разрешён") == true, row?.detail ?? "")
+        expect(row?.detail.contains("Не из разрешённых") == true, row?.detail ?? "")
         expect(row?.advice != nil)
         c.allow = AllowList()
         expectEqual(DeepCheck.sections(data, config: c).flatMap { $0.rows }.first { $0.id == "svc-summary" }?.level, .warn,
@@ -232,19 +232,33 @@ func registerPanelModelTests() {
         expectEqual(c.appGrace["claude"], nil)
     }
 
-    test("testDeepCheckGeoIPDisagreementIsWarningNotFailure") {
+    test("testDeepCheckCountryFromFirstDatabaseAndSplitRouting") {
         var c = Config.default
         c.allow = AllowList(ips: [], countries: ["NL"])
-        let d = DeepCheckData(
-            services: [ServiceResult(service: "a", outcome: .answer(IPAnswer(ip: "1.1.1.1", country: "NL"))),
-                       ServiceResult(service: "b", outcome: .answer(IPAnswer(ip: "1.1.1.1", country: "NL"))),
-                       ServiceResult(service: "c", outcome: .answer(IPAnswer(ip: "1.1.1.1", country: "CZ"))),
-                       ServiceResult(service: "d", outcome: .answer(IPAnswer(ip: "6.6.6.6", country: "CZ")))],
+        let ip = { (x: String) in IPAnswer(ip: x, country: "") }
+        var d = DeepCheckData(
+            services: [ServiceResult(service: "a", outcome: .answer(ip("195.133.9.79"))),
+                       ServiceResult(service: "b", outcome: .answer(ip("195.133.9.79"))),
+                       ServiceResult(service: "c", outcome: .failed("лимит запросов (HTTP 429)")),
+                       ServiceResult(service: "d", outcome: .answer(ip("46.138.81.39")))],
             ipv6: nil, routes: [], resolvers: [], snapshot: NetSnapshot(online: true, hasTunnel: true, gatewayIP: nil, gatewayMAC: nil, proxy: nil),
             finished: Date())
+        expectEqual(DeepCheck.majorityIP(d.services.compactMap { $0.answer }), "195.133.9.79")
+        d.geoIP = "195.133.9.79"
+        d.geo = [GeoAnswer(source: "ipinfo.io", outcome: .failure(.rateLimited(retryAfter: nil))),
+                 GeoAnswer(source: "api.country.is", outcome: .success("NL")),
+                 GeoAnswer(source: "ifconfig.co", outcome: .success("CZ"))]
         let rows = DeepCheck.sections(d, config: c).flatMap { $0.rows }
-        expectEqual(rows.first { $0.id == "svc-2" }?.level, .warn, "same confirmed IP, other GeoIP country")
-        expectEqual(rows.first { $0.id == "svc-3" }?.level, .fail, "a different IP stays a failure")
+        let lv = { (id: String) in rows.first { $0.id == id }?.level }
+        expectEqual(lv("svc-0"), .ok); expectEqual(lv("svc-2"), .unknown)
+        expectEqual(lv("svc-3"), .warn, "another address = split routing, not a failure by itself")
+        expectEqual(lv("svc-summary"), .ok, "NL from the first database that answered")
+        expect(rows.first { $0.id == "svc-summary" }?.detail.contains("api.country.is") == true)
+        expectEqual(lv("svc-split"), .warn)
+        expectEqual(lv("geo-0"), .unknown); expectEqual(lv("geo-1"), .ok); expectEqual(lv("geo-2"), .warn, "databases disagree")
+        d.geo = []
+        expectEqual(DeepCheck.sections(d, config: c).flatMap { $0.rows }.first { $0.id == "svc-summary" }?.level, .unknown,
+                    "no database answered: unknown, never green")
     }
 
     test("testCustomAppWarnsForSystemOnlyRule") {

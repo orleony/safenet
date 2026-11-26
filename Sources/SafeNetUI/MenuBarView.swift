@@ -175,7 +175,15 @@ struct NetworkFacts: View {
         let p = theme.palette
         HStack(spacing: theme.spacing) {
             if let a = model.lastIP {
-                fact(Text(Format.flag(a.country)), Format.countryName(a.country), p.muted)
+                if a.country.isEmpty {
+                    fact(Image(systemName: "questionmark.circle"), "Страна неизвестна", p.muted)
+                } else {
+                    fact(Text(Format.flag(a.country)), Format.countryName(a.country), p.muted)
+                }
+            }
+            if !model.status.splitIPs.isEmpty {
+                fact(Image(systemName: "arrow.triangle.branch"), "Раздельно", p.muted)
+                    .help("Часть трафика идёт мимо VPN (так настроен VPN): некоторые сервисы видят \(model.status.splitIPs.joined(separator: ", ")). Пропускать ли ИИ-сервисы, решает проверка маршрута до них.")
             }
             if let s = model.snapshot {
                 fact(Image(systemName: s.hasTunnel ? "lock.fill" : "lock.open"), s.hasTunnel ? "VPN" : "Без VPN",

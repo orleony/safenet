@@ -55,6 +55,7 @@ case "$cmd" in
       echo "uncommitted changes in Sources/Resources/scripts: commit them first (the release must match a commit)" >&2; exit 2
     fi
     echo "$VER" > VERSION
+    scripts/fetch-singbox.sh          # tests run every generated VPN config through `sing-box check`
     scripts/test.sh
     scripts/build-app.sh
     SLUG="$(repo_slug)"

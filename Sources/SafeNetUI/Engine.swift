@@ -345,10 +345,28 @@ public final class Engine {
             }
         }
         s.observation.ips = Engine.quorumAnswers(lastAnswers)
+        s.observation.vpnDown = vpnRequired && !vpnUp
         lastSample = s
         lastCheck = deps.clock.now
         guardian.apply(s.observation)
         publish()
+    }
+
+    // MARK: Built-in VPN
+
+    private var vpnRequired = false
+    private var vpnUp = false
+
+    /// Built-in VPN state: `required` = switched on in SafeNet, `up` = its tunnel runs. While it is
+    /// required and down, every protected app is frozen (kill switch). When the tunnel comes up
+    /// the exit address changes: a full check runs.
+    public func setVPN(required: Bool, up: Bool) {
+        guard required != vpnRequired || up != vpnUp else { return }
+        let cameUp = up && !vpnUp
+        vpnRequired = required; vpnUp = up
+        guard running else { return }
+        evaluateAndApply()
+        if cameUp || !required { deps.resetBackoff(); check(.full) }
     }
 
     // MARK: Actions

@@ -2,12 +2,13 @@ import SwiftUI
 import SafeNetCore
 
 public enum PanelTab: String, CaseIterable, Identifiable {
-    case overview, apps, allowed, networks, check, journal, settings
+    case overview, vpn, apps, allowed, networks, check, journal, settings
     public var id: String { rawValue }
 
     var title: String {
         switch self {
         case .overview: return "Обзор"
+        case .vpn: return "VPN"
         case .apps: return "Приложения"
         case .allowed: return "Разрешено"
         case .networks: return "Сети"
@@ -20,6 +21,7 @@ public enum PanelTab: String, CaseIterable, Identifiable {
     var symbol: String {
         switch self {
         case .overview: return "shield.lefthalf.filled"
+        case .vpn: return "lock.shield"
         case .apps: return "square.grid.2x2"
         case .allowed: return "checkmark.seal"
         case .networks: return "wifi"
@@ -53,6 +55,15 @@ public struct PanelView: View {
     }
 
     public var body: some View {
+        bodyContent
+            .onReceive(model.$requestedTab) { t in
+                guard let t = t else { return }
+                tab = t
+                DispatchQueue.main.async { model.requestedTab = nil }
+            }
+    }
+
+    private var bodyContent: some View {
         GeometryReader { geometry in
             let width = InspectorLayout.contentWidth(for: geometry.size.width)
             VStack(spacing: 0) {
@@ -127,6 +138,7 @@ public struct PanelView: View {
     @ViewBuilder private func content(settingsUseColumns: Bool) -> some View {
         switch tab {
         case .overview: OverviewTab(model: model, tab: $tab)
+        case .vpn: VPNTab(model: model)
         case .apps: AppsTab(model: model)
         case .allowed: AllowedTab(model: model)
         case .networks: NetworksTab(model: model)

@@ -116,6 +116,23 @@ private func tiered(apps: [String] = ["telegram"]) -> Config {
 }
 
 func registerEngineTests() {
+    test("testBuiltInVPNDownFreezesAndUpResumes") {
+        let r = ERig(config: tiered())
+        r.engine.start(watchConfig: false)
+        r.engine.networkChanged(online)
+        expectEqual(r.engine.status.state, .ok)
+        r.engine.setVPN(required: true, up: false)
+        if case .frozen(_, let reason, _) = r.engine.status.state { expectEqual(reason, .vpnDown) }
+        else { expect(false, "VPN on but down must freeze: \(r.engine.status.state)") }
+        let fetches = r.fetchCalls
+        r.engine.setVPN(required: true, up: true)
+        expectEqual(r.engine.status.state, .ok)
+        expect(r.fetchCalls > fetches, "tunnel up = new exit address: a full check runs")
+        r.engine.setVPN(required: true, up: false)
+        r.engine.setVPN(required: false, up: false)
+        expectEqual(r.engine.status.state, .ok, "VPN switched off: back to the IP checks only")
+    }
+
     test("testEngineFirstBadObservationFreezes") {
         let r = ERig(config: cfg())
         r.engine.start(watchConfig: false)

@@ -7,6 +7,7 @@ import SafeNetUI
 //    No UI, no AppKit: it waits for the parent to die, resumes whatever is still journaled, exits.
 //  - `SafeNetApp --install-update <pid> <staged.app> <target.app> <stateDir> <bundleID> <from> <to>`:
 //    the self-update helper started by the app right before it quits (UpdateInstaller).
+//  - `SafeNetVPNHelper --vpn-helper <uid>`: the built-in VPN's root daemon (VPNHelperDaemon).
 //  - `SafeNetApp <command> [args]` (status, allow, panel, config, version): console client of the
 //    running app (unix socket); no AppKit, no Dock icon, exits with its own code.
 //  - otherwise: the menu-bar app.
@@ -31,6 +32,11 @@ if args.count >= 2, args[1] == "--install-update" {
     signal(SIGHUP, SIG_IGN)
     signal(SIGTERM, SIG_IGN)
     exit(UpdateInstaller.runHelper(arguments: Array(args.dropFirst(2))))
+}
+
+if args.count >= 2, args[1] == "--vpn-helper" {
+    // Root LaunchDaemon of the built-in VPN (a root-owned copy of this binary).
+    exit(VPNHelperDaemon.run(arguments: Array(args.dropFirst(2))))
 }
 
 if isCLIInvocation(args) {

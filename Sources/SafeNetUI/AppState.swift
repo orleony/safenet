@@ -29,12 +29,16 @@ public final class AppState: ObservableObject {
     @Published public private(set) var deepCheckRunning = false
     /// Self-update ("Обновления" in Settings, a line in the menu when a version is waiting).
     @Published public private(set) var updateState: UpdateState = .disabled("нет движка")
+    /// A tab the panel should switch to when it opens / is shown (consumed by the panel).
+    @Published public var requestedTab: PanelTab?
 
     public let testMode: TestMode?
     /// Test mode without SAFENET_CONFIG_DIR: nothing is saved (shown in the window).
     public private(set) var configReadOnly = false
     public let appearance: SystemAppearance
     public let theme: Theme
+    /// Built-in VPN (servers, helper, connect / disconnect).
+    public let vpn: VPNController
 
     private let system: LiveSystem?
     private let previewLog: EventLog?
@@ -58,7 +62,10 @@ public final class AppState: ObservableObject {
         config = system.engine.config
         Format.setTimeZone(system.engine.config.timezone)
         theme = Theme(config: system.engine.config, appearance: appearance)
+        vpn = VPNController(store: VPNStore(url: system.paths.dir.appendingPathComponent("vpn.json")), cacheDir: system.paths.dir)
         rebuildShownApps()
+        vpn.onTunnel = { [weak system] required, up in system?.perform { $0.setVPN(required: required, up: up) } }
+        vpn.protectedApps = { [weak self] in AppState.tunnelSelectors(self?.config ?? .default) }
         system.onStatus = { [weak self] s in self?.receive(s) }
         system.onConfig = { [weak self] c in self?.receiveConfig(c) }
         system.onConfigError = { [weak self] e in self?.receiveConfigError(e) }
@@ -89,7 +96,7 @@ public final class AppState: ObservableObject {
 
     /// Static instance for previews / UI tests (no engine). `log` feeds the journal tab.
     public init(preview config: Config, status: EngineStatus, testMode: TestMode? = nil, systemScheme: ColorScheme = .dark,
-                log: EventLog? = nil) {
+                log: EventLog? = nil, vpn: VPNController? = nil) {
         system = nil
         previewLog = log
         self.testMode = testMode
@@ -98,6 +105,7 @@ public final class AppState: ObservableObject {
         self.config = config
         self.status = status
         theme = Theme(config: config, systemScheme: systemScheme)
+        self.vpn = vpn ?? VPNController(preview: VPNSettings(), helper: .notInstalled)
         rebuildShownApps()
     }
 
@@ -113,6 +121,17 @@ public final class AppState: ObservableObject {
             notifier.post(NoticeText(title: "SafeNet", body: r.message))
         }
         updater?.start()
+        vpn.start()
+    }
+
+    /// Routing selectors of the protected apps for the VPN's "only these apps" mode.
+    static func tunnelSelectors(_ c: Config) -> (paths: [String], names: [String]) {
+        var matches: [String] = []
+        for id in AppCatalog.appIDs(in: c) {
+            let custom = c.customApps.filter { $0.name == id }.map { $0.match }
+            matches += custom.isEmpty ? (AppCatalog.preset(id)?.matches ?? []) : custom
+        }
+        return SingBoxConfig.appSelectors(matches)
     }
 
     public func shutdown() {
@@ -235,7 +254,9 @@ public final class AppState: ObservableObject {
     /// A new config (hot reload, own change, or the in-memory one after a failed save). Clears no
     /// message: a failed save is followed by this very call.
     func receiveConfig(_ c: Config) {
+        let appsChanged = AppCatalog.appIDs(in: c) != AppCatalog.appIDs(in: config) || c.customApps != config.customApps
         config = c
+        if appsChanged { vpn.protectedAppsChanged() }
         Format.setTimeZone(c.timezone)
         theme.update(config: c)
         rebuildShownApps()

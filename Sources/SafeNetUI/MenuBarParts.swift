@@ -93,7 +93,7 @@ func stateColor(_ s: GuardState, _ p: Palette) -> RGB {
     case .closed: return p.danger
     case .frozen(_, let r, _):
         switch r {
-        case .ipv6Leak, .dnsLeak, .routeLeak, .freezeFailed: return p.danger
+        case .ipv6Leak, .dnsLeak, .routeLeak, .freezeFailed, .vpnDown: return p.danger
         default: return p.frozen
         }
     }

@@ -15,6 +15,7 @@ public struct MenuBarView: View {
             header
                 .onAppear { PanelOpener.register(openWindow) }
             ipBlock
+            VPNMenuRow(model: model, vpn: model.vpn, openPanel: { model.requestedTab = .vpn; openPanel() })
             notices
             buttons
         }
@@ -232,5 +233,37 @@ struct StateHalo: View {
             .padding(.horizontal, -40).padding(.vertical, -30)
             .allowsHitTesting(false)
             .accessibilityHidden(true)
+    }
+}
+
+/// One line in the menu for the built-in VPN: state, server and the on/off switch. Hidden until
+/// a server is added.
+struct VPNMenuRow: View {
+    @ObservedObject var model: AppState
+    @ObservedObject var vpn: VPNController
+    let openPanel: () -> Void
+    @EnvironmentObject var theme: Theme
+
+    var body: some View {
+        let p = theme.palette
+        if vpn.settings.selectedProfile != nil {
+            let on = vpn.settings.enabled
+            HStack(spacing: theme.spacing - 4) {
+                Image(systemName: "lock.shield").font(.system(size: 12, weight: .semibold))
+                    .foregroundColor((on ? (vpn.isRunning ? p.ok : p.frozen) : p.muted).swiftUIColor)
+                Button(action: openPanel) {
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(on ? (vpn.isRunning ? "VPN подключён" : (vpn.busy ?? "VPN не подключён")) : "VPN выключен")
+                            .font(theme.font(12, weight: .semibold)).foregroundColor(p.text.swiftUIColor)
+                        Text(vpn.settings.selectedProfile?.name ?? "").font(theme.font(10)).foregroundColor(p.muted.swiftUIColor).lineLimit(1)
+                    }
+                }
+                .buttonStyle(.plain)
+                Spacer()
+                Toggle("VPN", isOn: Binding(get: { on }, set: { $0 ? vpn.connect() : vpn.disconnect() }))
+                    .toggleStyle(SNSwitchStyle(theme: theme, showLabel: false))
+                    .disabled(vpn.busy != nil)
+            }
+        }
     }
 }

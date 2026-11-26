@@ -2,6 +2,8 @@ import Foundation
 
 public enum Reason: Equatable {
     case ipNotAllowed, countryNotAllowed, unconfirmed, ipv6Leak, dnsLeak, routeLeak, networkChanged
+    /// SafeNet's own VPN is switched on but its tunnel is not up (kill switch).
+    case vpnDown
     /// Produced only by `Guard` (frozen because there is no network; never closes).
     case offline
     /// Produced only by `Guard`: the app should be frozen but its processes could not be stopped
@@ -50,6 +52,8 @@ public struct Observation: Equatable {
     public var routeLeak: Bool
     public var trustedNetwork: Bool
     public var leakInputs: LeakInputs?
+    /// SafeNet's built-in VPN is on but its tunnel is down.
+    public var vpnDown = false
     public init(online: Bool, ips: [IPAnswer], ipv6Leak: Bool, dnsLeak: Bool, routeLeak: Bool, trustedNetwork: Bool,
                 leakInputs: LeakInputs? = nil) {
         self.online = online; self.ips = ips; self.ipv6Leak = ipv6Leak
@@ -77,6 +81,7 @@ public func sharedExitCountry(_ answers: [IPAnswer], minAgree: Int) -> String? {
 /// Pure policy. Evaluation order (first match wins; any uncertainty = freeze):
 ///  1. offline            -> .offline (checked before everything, trusted network included: no link, nothing to trust)
 ///  2. trusted network    -> .ok (online on a known network: VPN not required, leak/IP checks skipped)
+///     built-in VPN down  -> freeze(.vpnDown) (switched on in SafeNet, tunnel not up)
 ///     empty allow list   -> freeze(.noAllowList) (nothing can pass; the Guard never closes for it)
 ///  3. ipv6 / route leak  -> freeze (always); dns leak -> freeze only in .block mode (.warn/.off never freeze here)
 ///  4. confirmation       -> need >= minAgree answers with identical IP AND country (minAgree < 1 is treated as 1;
@@ -90,6 +95,7 @@ public func evaluate(_ o: Observation, allow: AllowList, minAgree: Int, dnsCheck
                      routeHosts: Set<String>? = nil) -> Verdict {
     guard o.online else { return .offline }
     if o.trustedNetwork { return .ok }
+    if o.vpnDown { return .freeze(.vpnDown) }
     if allow.ips.isEmpty && allow.countries.isEmpty { return .freeze(.noAllowList) }
     let v6 = o.leakInputs.map { $0.checkIPv6 && detectIPv6Leak(answers: $0.ipv6Answers, allow: allow) } ?? o.ipv6Leak
     if v6 { return .freeze(.ipv6Leak) }

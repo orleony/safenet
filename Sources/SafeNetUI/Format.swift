@@ -38,6 +38,7 @@ public enum Format {
         case .offline: return "нет сети"
         case .freezeFailed: return "не удалось заморозить приложение"
         case .noAllowList: return "нет разрешённых адресов — укажите страну или IP"
+        case .vpnDown: return "VPN SafeNet не подключён"
         }
     }
 

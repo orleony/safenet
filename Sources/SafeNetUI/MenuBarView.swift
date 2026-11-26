@@ -2,8 +2,7 @@ import SwiftUI
 import AppKit
 import SafeNetCore
 
-/// Menu-bar window, style "A · Тёмное стекло" (~270 pt): state, flag + IP, network line,
-/// warnings, first-run / frozen blocks, protected apps, "Пауза" and "Панель →".
+/// Compact network status and protection actions. App selection lives in the panel.
 public struct MenuBarView: View {
     @ObservedObject var model: AppState
     @EnvironmentObject var theme: Theme
@@ -12,27 +11,17 @@ public struct MenuBarView: View {
     public init(model: AppState) { self.model = model }
 
     public var body: some View {
-        let p = theme.palette
         VStack(alignment: .leading, spacing: theme.spacing) {
             header
                 .onAppear { PanelOpener.register(openWindow) }
             ipBlock
             notices
             Hairline()
-            apps
-            Hairline()
             buttons
-            HStack {
-                Spacer()
-                Button("Выйти из SafeNet") { model.quit() }
-                    .buttonStyle(.plain)
-                    .font(theme.font(10))
-                    .foregroundColor(p.muted.swiftUIColor)
-            }
         }
-        .padding(theme.padding)
-        .frame(width: 270)
-        .background(p.background.swiftUIColor)
+        .padding(theme.padding + 6)
+        .frame(width: 310)
+        .background(theme.palette.background.swiftUIColor)
     }
 
     // MARK: Sections
@@ -86,7 +75,13 @@ public struct MenuBarView: View {
             Text(Format.stateTitle(model.state, hasApps: model.hasProtectedApps))
                 .font(theme.font(13, weight: .semibold)).foregroundColor(p.text.swiftUIColor)
             Spacer(minLength: 4)
-            if model.testMode != nil { Badge(text: "ТЕСТОВЫЙ РЕЖИМ", color: p.frozen) }
+            Button(action: model.quit) {
+                Image(systemName: "power").frame(width: 24, height: 24)
+            }
+            .buttonStyle(.plain)
+            .foregroundColor(p.muted.swiftUIColor)
+            .help("Выйти из SafeNet")
+            .accessibilityLabel("Выйти из SafeNet")
         }
     }
 
@@ -94,11 +89,10 @@ public struct MenuBarView: View {
         let p = theme.palette
         return VStack(alignment: .leading, spacing: theme.smallGap / 2) {
             if let a = model.lastIP {
-                HStack(spacing: theme.spacing - 4) {
-                    Text(Format.flag(a.country)).font(.system(size: 26))
-                    Text(a.ip).font(theme.font(20, weight: .semibold)).foregroundColor(p.text.swiftUIColor)
-                        .lineLimit(1).minimumScaleFactor(0.6).textSelection(.enabled)
-                }
+                Text(a.ip)
+                    .font(theme.font(26, weight: .medium)).monospacedDigit()
+                    .foregroundColor(p.text.swiftUIColor)
+                    .lineLimit(1).minimumScaleFactor(0.55).textSelection(.enabled)
             } else if let country = model.status.sharedCountry {
                 Text("\(Format.flag(country)) \(country) · несколько IP")
                     .font(theme.font(15, weight: .semibold)).foregroundColor(p.text.swiftUIColor)
@@ -107,18 +101,6 @@ public struct MenuBarView: View {
                     .font(theme.font(18, weight: .semibold)).foregroundColor(p.muted.swiftUIColor)
             }
             Text(networkLine).font(theme.font(11)).foregroundColor(p.muted.swiftUIColor).lineLimit(2)
-        }
-    }
-
-    private var apps: some View {
-        let p = theme.palette
-        return VStack(alignment: .leading, spacing: theme.smallGap) {
-            if model.shownApps.isEmpty {
-                Text("Нет защищаемых приложений — добавьте их в панели")
-                    .font(theme.font(11)).foregroundColor(p.muted.swiftUIColor)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            ForEach(model.shownApps, id: \.self) { id in AppRow(model: model, id: id) }
         }
     }
 
@@ -151,7 +133,7 @@ public struct MenuBarView: View {
                 .overlay(RoundedRectangle(cornerRadius: Metrics.smallCornerRadius)
                     .stroke(theme.palette.hairline.swiftUIColor, lineWidth: Metrics.hairlineWidth))
             }
-            Button("Панель →") { openPanel() }
+            Button("Открыть панель") { openPanel() }
                 .buttonStyle(SNButtonStyle(kind: .primary, theme: theme))
         }
     }

@@ -52,11 +52,13 @@ public struct UpdateMarkers {
         return true
     }
 
-    /// The outcome of the last install, removed once read (shown once).
-    public func takeResult() -> Result? {
+    /// The outcome of the last install for the version now running, removed once read (shown
+    /// once). A success counts only when this IS the new version, a failure only when this is the
+    /// version that stayed; anything else is a leftover of another install and is dropped silently.
+    public func takeResult(currentVersion: String) -> Result? {
         guard let r = read(Result.self, result) else { return nil }
         try? FileManager.default.removeItem(at: result)
-        return r
+        return (r.ok ? r.to : r.from) == currentVersion ? r : nil
     }
 }
 
@@ -130,18 +132,12 @@ public struct UpdateInstaller {
     @discardableResult
     public func run(_ plan: Plan) -> Outcome {
         let markers = UpdateMarkers(dir: plan.stateDir)
-        let outcome = install(plan, markers)
-        let r: UpdateMarkers.Result
-        switch outcome {
-        case .installed:
-            r = .init(ok: true, from: plan.fromVersion, to: plan.toVersion, message: "SafeNet обновлён до \(plan.toVersion)")
-        case .aborted(let m):
-            r = .init(ok: false, from: plan.fromVersion, to: plan.toVersion, message: "Обновление до \(plan.toVersion) не установлено: \(m)")
-        case .rolledBack(let m):
-            r = .init(ok: false, from: plan.fromVersion, to: plan.toVersion,
-                      message: "Версия \(plan.toVersion) не запустилась (\(m)), возвращена версия \(plan.fromVersion)")
-        }
-        markers.write(r, to: markers.result)
+        let (outcome, relaunch) = install(plan, markers)
+        // The outcome is written BEFORE any version is started: the app reads it once, right at
+        // launch. A successful install already wrote it before starting the new version (that
+        // version consumed it), so it is not written a second time.
+        if outcome != .installed { markers.write(UpdateInstaller.result(outcome, plan), to: markers.result) }
+        if relaunch, system.exists(plan.target) { _ = system.launch(plan.target) }
         // The staged copy (`<stateDir>/updates/<version>/SafeNet.app`) is no longer needed either
         // way (a later check downloads again). Only ever removed inside the staging folder.
         let versionDir = plan.staged.deletingLastPathComponent().standardizedFileURL
@@ -149,14 +145,26 @@ public struct UpdateInstaller {
         return outcome
     }
 
-    private func install(_ plan: Plan, _ markers: UpdateMarkers) -> Outcome {
+    static func result(_ outcome: Outcome, _ plan: Plan) -> UpdateMarkers.Result {
+        switch outcome {
+        case .installed:
+            return .init(ok: true, from: plan.fromVersion, to: plan.toVersion, message: "SafeNet обновлён до \(plan.toVersion)")
+        case .aborted(let m):
+            return .init(ok: false, from: plan.fromVersion, to: plan.toVersion, message: "Обновление до \(plan.toVersion) не установлено: \(m)")
+        case .rolledBack(let m):
+            return .init(ok: false, from: plan.fromVersion, to: plan.toVersion,
+                         message: "Версия \(plan.toVersion) не запустилась (\(m)), возвращена версия \(plan.fromVersion)")
+        }
+    }
+
+    /// Returns the outcome and whether the installed (old) app must be started again by `run`.
+    private func install(_ plan: Plan, _ markers: UpdateMarkers) -> (Outcome, Bool) {
         guard system.waitForExit(plan.parentPID, timeout: parentTimeout) else {
             // The app is still running: restarting it from under it is not safe. Nothing touched.
-            return .aborted("SafeNet не завершился")
+            return (.aborted("SafeNet не завершился"), false)
         }
         if let why = system.validate(app: plan.staged, bundleID: plan.bundleID, version: plan.toVersion) {
-            relaunchOld(plan)
-            return .aborted(why)
+            return (.aborted(why), true)
         }
         let folder = plan.target.deletingLastPathComponent()
         let tag = "\(getpid())"
@@ -165,26 +173,25 @@ public struct UpdateInstaller {
         system.remove(fresh)
         do { try system.copy(plan.staged, to: fresh) } catch {
             system.remove(fresh)
-            relaunchOld(plan)
-            return .aborted("нет прав на запись в \(folder.lastPathComponent)")
+            return (.aborted("нет прав на запись в \(folder.lastPathComponent)"), true)
         }
         system.clearAttributes(fresh)
         let hadOld = system.exists(plan.target)
         if hadOld {
             do { try system.rename(plan.target, to: old) } catch {
                 system.remove(fresh)
-                relaunchOld(plan)
-                return .aborted("не удалось убрать прежнюю версию")
+                return (.aborted("не удалось убрать прежнюю версию"), true)
             }
         }
         do { try system.rename(fresh, to: plan.target) } catch {
             if hadOld { try? system.rename(old, to: plan.target) }
             system.remove(fresh)
-            relaunchOld(plan)
-            return .aborted("не удалось поставить новую версию")
+            return (.aborted("не удалось поставить новую версию"), true)
         }
 
         markers.write(UpdateMarkers.Pending(version: plan.toVersion, pid: getpid()), to: markers.pending)
+        // Provisional success, read by the new version as it starts; a rollback overwrites it.
+        markers.write(UpdateInstaller.result(.installed, plan), to: markers.result)
         guard system.launch(plan.target) else {
             return rollBack(plan, old: hadOld ? old : nil, markers, "запуск не удался")
         }
@@ -194,12 +201,12 @@ public struct UpdateInstaller {
             system.sleep(pollInterval)
         }
         if hadOld { system.remove(old) }
-        return .installed
+        return (.installed, false)
     }
 
-    private func rollBack(_ plan: Plan, old: URL?, _ markers: UpdateMarkers, _ why: String) -> Outcome {
+    private func rollBack(_ plan: Plan, old: URL?, _ markers: UpdateMarkers, _ why: String) -> (Outcome, Bool) {
         system.remove(markers.pending)
-        guard let old = old else { return .rolledBack(why + "; прежней версии не было") }
+        guard let old = old else { return (.rolledBack(why + "; прежней версии не было"), false) }
         system.stopInstances(of: plan.target)
         let failed = plan.target.deletingLastPathComponent()
             .appendingPathComponent(".\(plan.target.lastPathComponent).failed-\(getpid())")
@@ -207,16 +214,10 @@ public struct UpdateInstaller {
             try system.rename(plan.target, to: failed)
             try system.rename(old, to: plan.target)
         } catch {
-            return .rolledBack(why + "; прежнюю версию вернуть не удалось")
+            return (.rolledBack(why + "; прежнюю версию вернуть не удалось"), false)
         }
         system.remove(failed)
-        _ = system.launch(plan.target)
-        return .rolledBack(why)
-    }
-
-    /// Nothing was replaced: start the installed app again (the user did not ask it to quit).
-    private func relaunchOld(_ plan: Plan) {
-        if system.exists(plan.target) { _ = system.launch(plan.target) }
+        return (.rolledBack(why), true)
     }
 
     // MARK: Entry point of the helper process

@@ -1,4 +1,5 @@
 import CoreGraphics
+import SafeNetCore
 @testable import SafeNetUI
 
 func registerUITests() {
@@ -7,7 +8,9 @@ func registerUITests() {
     }
 
     test("testQuorumSettingsCountCloudflareAmongIPv4Services") {
-        expectEqual(SettingsTab.serviceCount, 5)
+        expectEqual(IPServiceSet.ipv4Hosts.count, 5)
+        expect(IPServiceSet.ipv4Hosts.contains("www.cloudflare.com"))
+        expect(!IPServiceSet.ipv4Hosts.contains("1.1.1.1"))
     }
 }
 

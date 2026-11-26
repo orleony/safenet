@@ -70,7 +70,8 @@ public struct SafeNetMenuApp: App {
                 .environmentObject(theme)
                 .preferredColorScheme(theme.forcedScheme)
         }
-        .defaultSize(width: 760, height: 520)
+        .windowStyle(.hiddenTitleBar)
+        .defaultSize(width: 960, height: 606)
         .windowResizability(.contentMinSize)
     }
 }

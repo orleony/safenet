@@ -30,11 +30,21 @@ public enum PanelTab: String, CaseIterable, Identifiable {
     }
 }
 
-/// Panel window, style "A · Тёмное стекло": sidebar with the tabs (⌘1…⌘7) and the selected tab
-/// on the background colour. A plain HStack instead of NavigationSplitView (stable on 13).
+enum InspectorLayout {
+    static func contentWidth(for windowWidth: CGFloat) -> CGFloat {
+        max(0, min(960, windowWidth - 62))
+    }
+
+    static func settingsUseColumns(for windowWidth: CGFloat) -> Bool {
+        contentWidth(for: windowWidth) >= 768
+    }
+}
+
+/// Inspector window with a fixed header and a shared measure for its tabs and scroll area.
 public struct PanelView: View {
     @ObservedObject var model: AppState
     @EnvironmentObject var theme: Theme
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @State private var tab: PanelTab
 
     public init(model: AppState, tab: PanelTab = .overview) {
@@ -43,76 +53,78 @@ public struct PanelView: View {
     }
 
     public var body: some View {
-        let p = theme.palette
-        HStack(spacing: 0) {
-            sidebar
-            Rectangle().fill(p.text.swiftUIColor.opacity(0.06)).frame(width: Metrics.hairlineWidth)
-            ScrollView {
-                content
-                    .frame(maxWidth: 820, alignment: .topLeading)   // readable column, centred on wide/full-screen windows
-                    .frame(maxWidth: .infinity, alignment: .top)
-                    .padding(.horizontal, theme.padding + 14)
-                    .padding(.vertical, theme.padding + 10)
+        GeometryReader { geometry in
+            let width = InspectorLayout.contentWidth(for: geometry.size.width)
+            VStack(spacing: 0) {
+                header(width: width)
+                ScrollView {
+                    content(settingsUseColumns: InspectorLayout.settingsUseColumns(for: geometry.size.width))
+                        .frame(width: width, alignment: .topLeading)
+                        .padding(.vertical, theme.padding + 10)
+                        .frame(maxWidth: .infinity, alignment: .top)
+                }
+                .background(theme.palette.background.swiftUIColor)
             }
-            .background(p.background.swiftUIColor)
         }
         .frame(minWidth: 680, minHeight: 460)
-        .background(p.background.swiftUIColor)
         .onAppear { model.refreshAutostart() }
     }
 
-    private var sidebar: some View {
+    private func header(width: CGFloat) -> some View {
         let p = theme.palette
-        return VStack(alignment: .leading, spacing: 3) {
-            HStack(spacing: theme.smallGap + 2) {
-                AppMark(size: 24, state: stateColor(model.state, p), ring: p.sidebar.swiftUIColor)
-                Text("SafeNet").font(theme.display(16, weight: .bold)).foregroundColor(p.text.swiftUIColor)
-            }
-            .padding(.horizontal, theme.spacing - 4)
-            .padding(.top, theme.smallGap)
-            .padding(.bottom, theme.spacing + 4)
-            ForEach(Array(PanelTab.allCases.enumerated()), id: \.element) { i, t in
-                Button { tab = t } label: {
-                    HStack(spacing: theme.spacing - 4) {
-                        Image(systemName: t.symbol).frame(width: 16).accessibilityHidden(true)
-                        Text(t.title).lineLimit(1)
-                        Spacer(minLength: 0)
+        return VStack(spacing: 0) {
+            VStack(spacing: 0) {
+                ZStack(alignment: .trailing) {
+                    HStack(spacing: theme.smallGap) {
+                        AppMark(size: 20)
+                        Text("SafeNet").font(theme.font(14, weight: .semibold))
                     }
-                    .font(theme.font(12.5, weight: tab == t ? .semibold : .medium))
-                    .foregroundColor((tab == t ? p.text : p.muted).swiftUIColor)
-                    .padding(.horizontal, theme.spacing - 2).padding(.vertical, theme.rowPadding + 2)
-                    .background(Capsule().fill(tab == t ? p.accent.swiftUIColor.opacity(0.16) : Color.clear))
-                    .overlay(Capsule().strokeBorder(tab == t ? p.accent.swiftUIColor.opacity(0.18) : Color.clear,
-                                                    lineWidth: Metrics.hairlineWidth))
-                    .contentShape(Capsule())
+                    .foregroundColor(p.text.swiftUIColor)
+                    .frame(maxWidth: .infinity)
+
+                    HStack(spacing: theme.smallGap) {
+                        let color = model.state == .ok && !model.hasProtectedApps ? p.muted : stateColor(model.state, p)
+                        Circle().fill(color.swiftUIColor).frame(width: 6, height: 6)
+                            .accessibilityHidden(true)
+                        Text(Format.stateTitle(model.state, hasApps: model.hasProtectedApps))
+                            .font(theme.font(11)).foregroundColor(p.text.swiftUIColor).lineLimit(1)
+                    }
                 }
-                .buttonStyle(.plain)
-                .keyboardShortcut(KeyEquivalent(Character("\(i + 1)")), modifiers: .command)
-                .accessibilityLabel(t.title)
-                .accessibilityAddTraits(tab == t ? .isSelected : [])
+                .frame(height: 40)
+                ViewThatFits(in: .horizontal) {
+                    navigation(showSymbols: true)
+                    navigation(showSymbols: false)
+                }
             }
-            Spacer()
-            HStack(spacing: theme.smallGap + 1) {
-                StatusDot(color: stateColor(model.state, p))
-                Text(Format.stateTitle(model.state, hasApps: model.hasProtectedApps))
-                    .font(theme.font(11, weight: .medium)).foregroundColor(p.muted.swiftUIColor)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            .padding(.horizontal, theme.spacing - 2)
-            .padding(.bottom, theme.smallGap)
+            .frame(width: width)
+            .frame(maxWidth: .infinity)
+            Rectangle().fill(p.hairline.swiftUIColor.opacity(0.7))
+                .frame(height: Metrics.hairlineWidth)
         }
-        .padding(theme.spacing)
-        .frame(width: 176)
-        .frame(maxHeight: .infinity, alignment: .top)
-        .background(
-            ZStack {
-                GlassBackground(material: .sidebar)
-                p.sidebar.swiftUIColor.opacity(theme.isDark ? 0.55 : 0.4)
+        .background {
+            if reduceTransparency {
+                p.surface.swiftUIColor
+            } else {
+                GlassBackground(material: .headerView).overlay(p.background.swiftUIColor.opacity(0.46))
             }
-        )
+        }
     }
 
-    @ViewBuilder private var content: some View {
+    private func navigation(showSymbols: Bool) -> some View {
+        HStack(spacing: 0) {
+            ForEach(Array(PanelTab.allCases.enumerated()), id: \.element) { i, t in
+                InspectorTabButton(title: t.title, symbol: showSymbols ? t.symbol : nil, selected: tab == t) {
+                    tab = t
+                }
+                .keyboardShortcut(KeyEquivalent(Character("\(i + 1)")), modifiers: .command)
+                if t != PanelTab.allCases.last {
+                    Spacer(minLength: theme.spacing)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder private func content(settingsUseColumns: Bool) -> some View {
         switch tab {
         case .overview: OverviewTab(model: model, tab: $tab)
         case .apps: AppsTab(model: model)
@@ -120,7 +132,39 @@ public struct PanelView: View {
         case .networks: NetworksTab(model: model)
         case .check: CheckTab(model: model)
         case .journal: JournalTab(model: model)
-        case .settings: SettingsTab(model: model)
+        case .settings: SettingsTab(model: model, useColumns: settingsUseColumns)
         }
+    }
+}
+
+struct InspectorTabButton: View {
+    @EnvironmentObject private var theme: Theme
+    @State private var hovering = false
+    let title: String
+    var symbol: String? = nil
+    let selected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        let p = theme.palette
+        Button(action: action) {
+            HStack(spacing: theme.smallGap) {
+                if let symbol {
+                    Image(systemName: symbol).accessibilityHidden(true)
+                }
+                Text(title).lineLimit(1)
+            }
+            .fixedSize(horizontal: true, vertical: false)
+            .font(theme.font(12, weight: selected ? .semibold : .medium))
+            .foregroundColor((selected || hovering ? p.text : p.muted).swiftUIColor)
+            .padding(.vertical, theme.rowPadding + 3)
+            .overlay(alignment: .bottom) {
+                if selected { Capsule().fill(p.accent.swiftUIColor).frame(height: 2) }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .accessibilityAddTraits(selected ? .isSelected : [])
     }
 }

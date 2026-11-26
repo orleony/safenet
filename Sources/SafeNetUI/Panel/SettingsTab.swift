@@ -1,115 +1,284 @@
 import SwiftUI
 import SafeNetCore
 
-/// "Настройки": every Config parameter. Each change goes through `AppState.update` (the engine's
-/// update path: written to config.yaml, refused in test mode, broken file copied first).
+/// Summary of the common rule. Individual applications can override the allow list or timeout.
+struct InspectorFreezeRule {
+    let duration: String?
+    let outcome: String
+
+    init(config: Config) {
+        if config.allow.ips.isEmpty && config.allow.countries.isEmpty {
+            duration = nil
+            outcome = "Без таймера закрытия"
+            return
+        }
+
+        let seconds = "\(DurationInput.text(config.grace)) с"
+        switch config.onTimeout {
+        case .close:
+            duration = seconds
+            outcome = "Закрытие приложений"
+        case .keepFrozen:
+            duration = nil
+            outcome = "До успешной проверки"
+        case .resume:
+            duration = seconds
+            outcome = "Разморозка приложений"
+        }
+    }
+}
+
 struct SettingsTab: View {
     @ObservedObject var model: AppState
     @EnvironmentObject var theme: Theme
+    let useColumns: Bool
+    @State private var section: Section = .protection
 
-    /// IPv4 IP services taking part in the quorum (min_agree above this can never be met).
-    static let serviceCount = IPServiceSet.ipv4Hosts.count
+    private enum Section: String, CaseIterable {
+        case protection = "Защита"
+        case appearance = "Внешний вид"
+        case system = "Система"
+    }
 
     var body: some View {
-        let p = theme.palette
-        let c = model.config
-        VStack(alignment: .leading, spacing: theme.spacing + 2) {
-            SectionHeader(title: "Настройки", subtitle: "Всё сохраняется в config.yaml; правки файла вручную сразу появляются здесь.")
-            if model.configReadOnly { Note(LiveSystem.readOnlyMessage, symbol: "info.circle", color: p.frozen) }
-            Card {
-                CardTitle("Заморозка и закрытие")
-                durationRow("Время заморозки", "Сколько ждать правильный IP, прежде чем выполнить действие ниже (\(DurationInput.text(DurationInput.graceRange.lowerBound))–\(DurationInput.text(DurationInput.graceRange.upperBound)) с).",
-                            c.grace, DurationInput.graceRange) { v in model.update { $0.grace = v } }
-                SettingRow("Когда время вышло", detail: timeoutDetail(c.onTimeout)) {
-                    Segmented(options: [(TimeoutAction.close, "Закрыть"), (.keepFrozen, "Держать замороженным"), (.resume, "Разморозить")],
-                              selection: c.onTimeout) { v in model.update { $0.onTimeout = v } }
-                }
-                if c.onTimeout == .resume {
-                    Note("«Разморозить» снова пускает приложения в сеть с неправильного адреса. Используйте, только если понимаете риск.",
-                         symbol: "exclamationmark.triangle", color: p.danger)
-                }
-                durationRow("Ожидание при закрытии", "После вежливой просьбы закрыться — сколько ждать до принудительного (0–60 с).",
-                            c.closeTimeout, 0...60) { v in model.update { $0.closeTimeout = v } }
-                SettingRow("Без сети замораживать", detail: "Без сети ничего не утекает, поэтому приложения только замораживаются и никогда не закрываются.") {
-                    toggle("Без сети замораживать", c.blockWhenOffline) { v in model.update { $0.blockWhenOffline = v } }
-                }
-                durationRow("Пауза по умолчанию, мин", "Длина «Паузы» из меню и Обзора (1–1440 мин).", c.pauseDefault / 60, 1...1440,
-                            unit: .minutes) { v in
-                    model.update { $0.pauseDefault = v * 60 }
+        VStack(alignment: .leading, spacing: theme.padding) {
+            Text("Настройки")
+                .font(theme.font(26, weight: .semibold))
+                .foregroundColor(theme.palette.text.swiftUIColor)
+                .accessibilityAddTraits(.isHeader)
+
+            HStack(spacing: theme.spacing * 2) {
+                ForEach(Section.allCases, id: \.self) { tab in
+                    InspectorTabButton(title: tab.rawValue, selected: section == tab) { section = tab }
                 }
             }
-            Card {
-                CardTitle("Проверки")
-                durationRow("Интервал проверки", "Опрос IP по таймеру в дополнение к системным событиям сети (1–300 с).",
-                            c.checkInterval, 1...300) { v in model.update { $0.checkInterval = v } }
-                SettingRow("Сколько сервисов должны совпасть",
-                           detail: "Столько ответов нужно для подтверждения. Несколько IP допускаются при единогласном подтверждении разрешённой страны. Активно \(c.ipServices.count) из \(SettingsTab.serviceCount).") {
-                    Segmented(options: (1...max(1, c.ipServices.count)).map { ($0, "\($0)") }, selection: c.minAgree) { v in model.update { $0.minAgree = v } }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(alignment: .bottom) {
+                Rectangle().fill(theme.palette.hairline.swiftUIColor.opacity(0.7)).frame(height: 1)
+            }
+
+            if model.configReadOnly {
+                Note(LiveSystem.readOnlyMessage, symbol: "info.circle", color: theme.palette.frozen)
+            }
+            if let error = model.configError {
+                Note(error, symbol: "xmark.octagon", color: theme.palette.danger)
+            }
+
+            switch section {
+            case .protection: protection
+            case .appearance: AppearanceSettings(model: model)
+            case .system: SystemSettings(model: model)
+            }
+        }
+    }
+
+    private var protection: some View {
+        let columns = useColumns
+            ? AnyLayout(HStackLayout(alignment: .top, spacing: theme.padding + 6))
+            : AnyLayout(VStackLayout(alignment: .leading, spacing: theme.padding + 6))
+
+        return VStack(alignment: .leading, spacing: theme.padding + 6) {
+            ruleSummary
+            columns {
+                freezing.frame(maxWidth: .infinity, alignment: .topLeading)
+                network.frame(maxWidth: .infinity, alignment: .topLeading)
+            }
+        }
+    }
+
+    private var ruleSummary: some View {
+        let p = theme.palette
+        let rule = InspectorFreezeRule(config: model.config)
+
+        return HStack(spacing: theme.smallGap + 4) {
+            Text("Правило по умолчанию").foregroundColor(p.muted.swiftUIColor)
+            Text("Заморозка").foregroundColor(p.text.swiftUIColor)
+            if let duration = rule.duration {
+                summaryArrow
+                Text(duration).monospacedDigit().fontWeight(.semibold)
+                    .foregroundColor(p.text.swiftUIColor)
+            }
+            summaryArrow
+            Text(rule.outcome).foregroundColor(p.text.swiftUIColor)
+        }
+        .font(theme.font(11))
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, theme.padding)
+        .padding(.vertical, theme.rowPadding + 2)
+        .background(p.surface.swiftUIColor, in: RoundedRectangle(cornerRadius: Metrics.smallCornerRadius))
+        .help("При неподтверждённом IP. Правила отдельных приложений могут отличаться.")
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(["Правило по умолчанию при неподтверждённом IP", "Заморозка", rule.duration, rule.outcome]
+            .compactMap { $0 }.joined(separator: ", "))
+    }
+
+    private var summaryArrow: some View {
+        Image(systemName: "arrow.right")
+            .font(.system(size: 9))
+            .foregroundColor(theme.palette.muted.swiftUIColor)
+            .accessibilityHidden(true)
+    }
+
+    private var freezing: some View {
+        let config = model.config
+
+        return VStack(alignment: .leading, spacing: theme.smallGap + 3) {
+            InspectorSettingsGroup("Заморозка и закрытие") {
+                durationRow("Время заморозки", \.grace, DurationInput.graceRange)
+                InspectorSettingsDivider()
+                InspectorSettingRow("По истечении времени") {
+                    Picker("По истечении времени", selection: Binding(get: { model.config.onTimeout },
+                                                                      set: { value in model.update { $0.onTimeout = value } })) {
+                        Text("Закрыть приложения").tag(TimeoutAction.close)
+                        Text("Держать замороженными").tag(TimeoutAction.keepFrozen)
+                        Text("Разморозить").tag(TimeoutAction.resume)
+                    }
+                    .pickerStyle(.menu).labelsHidden().fixedSize()
                 }
-                if c.minAgree > c.ipServices.count {
-                    Note("Требуется \(c.minAgree) совпадений, но включено \(c.ipServices.count) сервисов.",
-                         symbol: "exclamationmark.triangle", color: p.danger)
+                if config.onTimeout == .resume {
+                    Note("Приложения снова смогут выйти в сеть с неподтверждённого адреса.",
+                         symbol: "exclamationmark.triangle", color: theme.palette.danger)
+                        .padding(.horizontal, theme.padding).padding(.bottom, theme.rowPadding)
                 }
-                ForEach(IPServiceSet.ipv4Hosts, id: \.self) { host in
-                    let enabled = c.ipServices.contains(host)
-                    SettingRow(host) {
-                        toggle(host, enabled) { on in
-                            model.update { config in
-                                if on {
-                                    if !config.ipServices.contains(host) { config.ipServices.append(host) }
-                                } else if config.ipServices.count > config.minAgree {
-                                    config.ipServices.removeAll { $0 == host }
-                                }
-                            }
-                        }
-                        .disabled(enabled && c.ipServices.count <= c.minAgree)
+                InspectorSettingsDivider()
+                InspectorSettingRow("Замораживать без сети", detail: "Пока сети нет, приложения не закрываются.") {
+                    toggle("Замораживать без сети", config.blockWhenOffline) { value in
+                        model.update { $0.blockWhenOffline = value }
                     }
                 }
-                SettingRow("Проверять IPv6", detail: "Замораживать, если IPv6 выходит мимо VPN.") {
-                    toggle("Проверять IPv6", c.checkIPv6) { v in model.update { $0.checkIPv6 = v } }
-                }
-                SettingRow("Проверка DNS", detail: dnsDetail(c.dnsCheck)) {
-                    Segmented(options: [(DNSCheckMode.warn, "Предупреждать"), (.block, "Замораживать"), (.off, "Выключена")],
-                              selection: c.dnsCheck) { v in model.update { $0.dnsCheck = v } }
-                }
-                SettingRow("Маршрут до ИИ-сервисов", detail: "Раз в 15 секунд и после смены сети проверяет, какой IP видят ИИ-сервисы. Claude, ChatGPT, Codex и Perplexity оцениваются по маршрутам своих сервисов.") {
-                    toggle("Маршрут до ИИ-сервисов", c.routeCheck) { v in model.update { $0.routeCheck = v } }
+                InspectorSettingsDivider()
+                durationRow("Пауза по умолчанию", \.pauseDefault, 1...1440, unit: .minutes)
+            }
+
+            disclosure("Расширенные параметры закрытия") {
+                InspectorSettingsGroup {
+                    durationRow("Ожидание при закрытии", \.closeTimeout, 0...60,
+                                detail: "До принудительного завершения приложения.")
                 }
             }
-            AppearanceSettings(model: model)
-            SystemSettings(model: model)
         }
     }
 
-    private func timeoutDetail(_ a: TimeoutAction) -> String {
-        switch a {
-        case .close: return "Приложение закрывается (рекомендуется)."
-        case .keepFrozen: return "Приложение остаётся замороженным, пока адрес не станет правильным."
-        case .resume: return "Приложение размораживается и работает дальше."
+    private var network: some View {
+        let config = model.config
+
+        return VStack(alignment: .leading, spacing: theme.smallGap + 3) {
+            InspectorSettingsGroup("Проверки сети") {
+                durationRow("Интервал проверки IP", \.checkInterval, 1...300)
+                InspectorSettingsDivider()
+                InspectorSettingRow("Совпадений для подтверждения") {
+                    let count = config.ipServices.count
+                    Picker("Совпадений для подтверждения", selection: Binding(get: { model.config.minAgree },
+                                                                             set: { value in model.update { $0.minAgree = value } })) {
+                        if config.minAgree > count {
+                            Text("\(config.minAgree) из \(count)").tag(config.minAgree)
+                        }
+                        ForEach(1...max(1, count), id: \.self) { number in
+                            Text("\(number) из \(count)").tag(number)
+                        }
+                    }
+                    .pickerStyle(.menu).labelsHidden().fixedSize()
+                    .help("Сколько включённых сервисов должны вернуть одинаковый внешний IP. Страна проверяется отдельно.")
+                }
+                if config.minAgree > config.ipServices.count {
+                    Note("Требуется \(config.minAgree) совпадений, но включено \(config.ipServices.count) сервисов.",
+                         symbol: "exclamationmark.triangle", color: theme.palette.danger)
+                        .padding(.horizontal, theme.padding).padding(.bottom, theme.rowPadding)
+                }
+                InspectorSettingsDivider()
+                serviceSettings
+                InspectorSettingsDivider()
+                InspectorSettingRow("Проверять IPv6") {
+                    toggle("Проверять IPv6", config.checkIPv6) { value in model.update { $0.checkIPv6 = value } }
+                        .help("Замораживать приложения, если IPv6 выходит мимо VPN.")
+                }
+            }
+
+            disclosure("DNS и маршруты до ИИ-сервисов") {
+                InspectorSettingsGroup {
+                    InspectorSettingRow("Проверка DNS") {
+                        Picker("Проверка DNS", selection: Binding(get: { model.config.dnsCheck },
+                                                                  set: { value in model.update { $0.dnsCheck = value } })) {
+                            Text("Предупреждать").tag(DNSCheckMode.warn)
+                            Text("Замораживать").tag(DNSCheckMode.block)
+                            Text("Выключена").tag(DNSCheckMode.off)
+                        }
+                        .pickerStyle(.menu).labelsHidden().fixedSize()
+                    }
+                    if config.dnsCheck == .block {
+                        Note("У корпоративных VPN возможны ложные срабатывания.",
+                             symbol: "info.circle", color: theme.palette.frozen)
+                            .padding(.horizontal, theme.padding).padding(.bottom, theme.rowPadding)
+                    }
+                    InspectorSettingsDivider()
+                    InspectorSettingRow("Маршрут до ИИ-сервисов",
+                                        detail: "Проверяет, какой IP видят Claude, ChatGPT, Codex и Perplexity.") {
+                        toggle("Маршрут до ИИ-сервисов", config.routeCheck) { value in
+                            model.update { $0.routeCheck = value }
+                        }
+                    }
+                }
+            }
         }
     }
 
-    private func dnsDetail(_ m: DNSCheckMode) -> String {
-        switch m {
-        case .warn: return "Возможная утечка DNS показывается предупреждением."
-        case .block: return "Возможная утечка DNS замораживает приложения (у корпоративных VPN бывают ложные срабатывания)."
-        case .off: return "DNS не проверяется."
+    private var serviceSettings: some View {
+        DisclosureGroup {
+            ForEach(IPServiceSet.ipv4Hosts, id: \.self) { host in
+                let config = model.config
+                let enabled = config.ipServices.contains(host)
+                InspectorSettingRow(host) {
+                    toggle(host, enabled) { on in
+                        model.update { settings in
+                            if on {
+                                if !settings.ipServices.contains(host) {
+                                    settings.ipServices.append(host)
+                                }
+                            } else if settings.ipServices.count > settings.minAgree {
+                                settings.ipServices.removeAll { $0 == host }
+                            }
+                        }
+                    }
+                    .disabled(enabled && config.ipServices.count <= config.minAgree)
+                }
+            }
+        } label: {
+            HStack {
+                Text("Сервисы внешнего IP").font(theme.font(12, weight: .medium)).foregroundColor(theme.palette.text.swiftUIColor)
+                Spacer(minLength: theme.smallGap)
+                Text("Включено \(model.config.ipServices.count)")
+                    .font(theme.font(11)).foregroundColor(theme.palette.muted.swiftUIColor)
+            }
+            .padding(.vertical, theme.rowPadding + 6)
         }
+        .tint(theme.palette.muted.swiftUIColor)
+        .padding(.horizontal, theme.padding)
     }
 
-    func toggle(_ label: String, _ on: Bool, _ set: @escaping (Bool) -> Void) -> some View {
-        Toggle(label, isOn: Binding(get: { on }, set: set)).toggleStyle(SNSwitchStyle(theme: theme, showLabel: false)).fixedSize()
+    private func disclosure<Content: View>(_ title: String, @ViewBuilder content: @escaping () -> Content) -> some View {
+        DisclosureGroup {
+            content().padding(.top, theme.smallGap)
+        } label: {
+            Text(title).font(theme.font(11)).foregroundColor(theme.palette.muted.swiftUIColor)
+        }
+        .tint(theme.palette.muted.swiftUIColor)
+    }
+
+    private func toggle(_ label: String, _ on: Bool, _ set: @escaping (Bool) -> Void) -> some View {
+        Toggle(label, isOn: Binding(get: { on }, set: set))
+            .toggleStyle(SNSwitchStyle(theme: theme, showLabel: false)).fixedSize()
             .accessibilityLabel(label)
     }
 
-    func durationRow(_ title: String, _ detail: String, _ value: Double, _ range: ClosedRange<Double>,
-                     unit: DurationInput.Unit = .seconds, _ set: @escaping (Double) -> Void) -> some View {
-        SettingRow(title, detail: detail) {
-            ValidatedField(label: title, placeholder: "", actionTitle: "OK", initial: DurationInput.text(value), width: 70,
-                           validate: { r in let x = DurationInput.parse(r, range: range, unit: unit); return InputCheck(value: x.value.map { DurationInput.text($0) }, error: x.error, warning: nil) },
-                           commit: { v in if let d = DurationInput.parse(v, range: range, unit: unit).value { set(d) } })
-                .frame(width: 220, alignment: .trailing)
-                .id(value)                      // re-initialised after a hot reload changed the value
+    private func durationRow(_ title: String, _ key: WritableKeyPath<Config, TimeInterval>,
+                             _ range: ClosedRange<Double>, unit: DurationInput.Unit = .seconds,
+                             detail: String? = nil) -> some View {
+        let setting = InspectorDurationSetting(key: key, range: range, unit: unit)
+        return InspectorDurationRow(title: title, value: setting.value(in: model.config), range: range,
+                                    unit: unit, detail: detail) { number in
+            model.update { setting.set(number, in: &$0) }
+        } step: { amount in
+            model.update { setting.step(by: amount, in: &$0) }
         }
     }
 }

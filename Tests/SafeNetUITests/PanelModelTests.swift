@@ -5,6 +5,42 @@ import SafeNetCore
 private func ev(_ k: EventKind, _ app: String?, _ d: String) -> Event { Event(kind: k, app: app, detail: d) }
 
 func registerPanelModelTests() {
+    test("testInspectorLayoutKeepsNavigationAndContentOnOneMeasure") {
+        expectEqual(InspectorLayout.contentWidth(for: 680), 618)
+        expectEqual(InspectorLayout.contentWidth(for: 1400), 960)
+        expect(!InspectorLayout.settingsUseColumns(for: 680))
+        expect(InspectorLayout.settingsUseColumns(for: 960))
+    }
+
+    test("testInspectorFreezeRuleReflectsDefaultPolicy") {
+        var config = Config.default
+        config.grace = 30
+        config.onTimeout = .close
+        expectEqual(InspectorFreezeRule(config: config).duration, nil)
+        expectEqual(InspectorFreezeRule(config: config).outcome, "Без таймера закрытия")
+        config.allow = AllowList(ips: [], countries: ["NL"])
+        expectEqual(InspectorFreezeRule(config: config).duration, "30 с")
+        expectEqual(InspectorFreezeRule(config: config).outcome, "Закрытие приложений")
+        config.onTimeout = .keepFrozen
+        expectEqual(InspectorFreezeRule(config: config).duration, nil)
+        expectEqual(InspectorFreezeRule(config: config).outcome, "До успешной проверки")
+        config.onTimeout = .resume
+        expectEqual(InspectorFreezeRule(config: config).duration, "30 с")
+        expectEqual(InspectorFreezeRule(config: config).outcome, "Разморозка приложений")
+    }
+
+    test("testInspectorDurationStepsApplyToTheCurrentConfig") {
+        let setting = InspectorDurationSetting(key: \.pauseDefault, range: 1...1440, unit: .minutes)
+        var config = Config.default
+        setting.step(by: 1, in: &config)
+        setting.step(by: -1, in: &config)
+        expectEqual(config.pauseDefault, Config.default.pauseDefault)
+
+        setting.set(1, in: &config)
+        setting.step(by: -1, in: &config)
+        expectEqual(config.pauseDefault, 60)
+    }
+
     // MARK: Allowed IPs / countries
 
     test("testAllowIPValidation") {

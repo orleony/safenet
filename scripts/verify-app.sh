@@ -101,9 +101,12 @@ ARCHS="$(lipo -archs "$EXE" 2>/dev/null)"
 PL="$APP/Contents/Info.plist"
 check "plutil -lint Info.plist" plutil -lint "$PL"
 key() { plutil -extract "$1" raw -o - "$PL" 2>/dev/null; }
+WANT_VER="$(tr -d '[:space:]' < VERSION)"
+IFS=. read -r V_MAJ V_MIN V_PAT <<< "$WANT_VER"
+WANT_BUILD=$(( V_MAJ * 10000 + 10#$V_MIN * 100 + 10#$V_PAT ))
 for kv in CFBundleIdentifier=local.safenet.app CFBundleName=SafeNet CFBundleDisplayName=SafeNet \
-          CFBundleExecutable=SafeNetApp CFBundlePackageType=APPL CFBundleShortVersionString=1.0.0 \
-          CFBundleVersion=1 LSMinimumSystemVersion=13.0 LSUIElement=true NSHighResolutionCapable=true \
+          CFBundleExecutable=SafeNetApp CFBundlePackageType=APPL CFBundleShortVersionString=$WANT_VER \
+          CFBundleVersion=$WANT_BUILD LSMinimumSystemVersion=13.0 LSUIElement=true NSHighResolutionCapable=true \
           NSPrincipalClass=NSApplication CFBundleIconFile=AppIcon \
           LSApplicationCategoryType=public.app-category.utilities; do
     k="${kv%%=*}"; v="${kv#*=}"; got="$(key "$k")"

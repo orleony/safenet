@@ -32,6 +32,10 @@
 	<true/>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
+	<key>SafeNetUpdateFeed</key>
+	<string>https://github.com/orleony/safenet/releases/latest/download/update.json</string>
+	<key>SafeNetUpdatePublicKey</key>
+	<string></string>
 	<key>NSHumanReadableCopyright</key>
 	<string>SafeNet. Локальная сборка, без телеметрии.</string>
 </dict>

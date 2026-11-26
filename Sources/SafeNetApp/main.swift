@@ -5,6 +5,8 @@ import SafeNetUI
 // Two modes of the same binary:
 //  - `SafeNetApp --watchdog <parentPID> <journalPath>`: the watchdog child started by the app.
 //    No UI, no AppKit: it waits for the parent to die, resumes whatever is still journaled, exits.
+//  - `SafeNetApp --install-update <pid> <staged.app> <target.app> <stateDir> <bundleID> <from> <to>`:
+//    the self-update helper started by the app right before it quits (UpdateInstaller).
 //  - `SafeNetApp <command> [args]` (status, allow, panel, config, version): console client of the
 //    running app (unix socket); no AppKit, no Dock icon, exits with its own code.
 //  - otherwise: the menu-bar app.
@@ -21,6 +23,14 @@ if args.count >= 4, args[1] == "--watchdog", let parent = Int32(args[2]), parent
 } else if args.count >= 2, args[1] == "--watchdog" {
     FileHandle.standardError.write(Data("usage: SafeNetApp --watchdog <parentPID> <journalPath>\n".utf8))
     exit(2)
+}
+
+if args.count >= 2, args[1] == "--install-update" {
+    // Outlives the app on purpose: it swaps the bundle once the app has exited.
+    signal(SIGINT, SIG_IGN)
+    signal(SIGHUP, SIG_IGN)
+    signal(SIGTERM, SIG_IGN)
+    exit(UpdateInstaller.runHelper(arguments: Array(args.dropFirst(2))))
 }
 
 if isCLIInvocation(args) {

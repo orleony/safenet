@@ -57,6 +57,18 @@ public struct MenuBarView: View {
                     .font(theme.font(11)).foregroundColor((m.isError ? p.danger : p.muted).swiftUIColor)
                     .fixedSize(horizontal: false, vertical: true)
             }
+            if let u = UpdateText.menuLine(model.updateState) {
+                HStack(spacing: theme.smallGap) {
+                    Label(u, systemImage: "arrow.down.circle")
+                        .font(theme.font(11)).foregroundColor(p.accent.swiftUIColor)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if case .available = model.updateState {
+                        Spacer(minLength: 4)
+                        Button("Обновить") { model.installUpdate() }
+                            .buttonStyle(SNButtonStyle(kind: .secondary, theme: theme)).fixedSize()
+                    }
+                }
+            }
             if model.needsAllowSetup { FirstRunCard(model: model, openPanel: openPanel) }
             if case .frozen(_, let r, let d) = model.state { FrozenCard(model: model, reason: r, deadline: d) }
             if case .closed(let at) = model.state {

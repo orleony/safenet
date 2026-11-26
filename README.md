@@ -22,7 +22,8 @@ On Apple Silicon with Rosetta, `SAFENET_TEST_ARCH=x86_64 scripts/test.sh` runs t
 
 ## Network use and rate limits
 
-Only IP-lookup services and `/cdn-cgi/trace` of five AI hosts are contacted (no telemetry).
+Only IP-lookup services, `/cdn-cgi/trace` of five AI hosts and, unless `updates: off`, the GitHub
+release feed once a day are contacted (no telemetry).
 Automatic route checks run every 15 seconds while apps are protected. Claude, Claude Code,
 ChatGPT, Codex and Perplexity use the trace results for their own services.
 After a network change, these apps wait for a fresh route check before resuming.
@@ -41,6 +42,30 @@ errors and timeouts never back off; network change, wake and a manual check rese
 (a failure of a request started before the reset is not counted). Skipped services are simply
 missing from the answers. The deep check uses its own, unwrapped services. If a VPN routes
 1.1.1.1 outside the tunnel the cheap check never matches and every tick runs the full fan-out.
+
+## Updates and releases
+
+The app updates itself from GitHub Releases (`Sources/SafeNetUI/Updater.swift`,
+`Sources/SafeNetCore/Update/`). Once a day (and on «Проверить сейчас») it fetches
+`SafeNetUpdateFeed` from Info.plist (`…/releases/latest/download/update.json`) and `update.json.sig`,
+checks the Ed25519 signature against `SafeNetUpdatePublicKey` (Info.plist), and only then the
+version, the archive URL (https), its size and SHA-256. A verified newer build is unpacked,
+re-checked (bundle id, version, `codesign --verify --deep --strict`) and installed only while
+nothing is frozen, closed or paused: the helper `SafeNetApp --install-update …` (the current binary)
+waits for the app to quit, swaps the bundle in place with two renames, starts the new version and
+rolls back if it does not confirm within 45 s. `updates: auto | notify | off` (default auto).
+Without a public key in Info.plist updates are disabled.
+
+```sh
+scripts/release.sh keygen            # once: private key ~/.config/safenet/update-signing.key (0600,
+                                     # back it up, never commit), public key into Resources/Info.plist
+scripts/release.sh build 1.1.0       # writes VERSION, runs tests, builds, signs dist/release/*
+scripts/release.sh publish 1.1.0     # after committing VERSION: tag v1.1.0 + GitHub release
+```
+
+`VERSION` holds the version; `build-app.sh` writes it into the bundle (`CFBundleVersion` =
+major*10000 + minor*100 + patch). Testing a release before publishing it:
+`SAFENET_UPDATE_FEED=<url>` and `SAFENET_UPDATE_PUBKEY=<base64>` override the Info.plist values.
 
 ## The `safenet` command
 

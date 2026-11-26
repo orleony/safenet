@@ -33,6 +33,12 @@ printf 'APPL????' > "$APP/Contents/PkgInfo"
 cp .build/icon/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 cp Resources/safenet "$APP/Contents/Resources/safenet"
 chmod 755 "$APP/Contents/MacOS/SafeNetApp" "$APP/Contents/Resources/safenet"
+# Version: the VERSION file (x.y.z) -> CFBundleShortVersionString, and x*10000+y*100+z -> CFBundleVersion.
+VERSION="$(tr -d '[:space:]' < VERSION)"
+[[ "$VERSION" =~ ^([0-9]+)\.([0-9]{1,2})\.([0-9]{1,2})$ ]] || { echo "VERSION must be x.y.z (y, z < 100), got '$VERSION'" >&2; exit 2; }
+BUILD=$(( BASH_REMATCH[1] * 10000 + 10#${BASH_REMATCH[2]} * 100 + 10#${BASH_REMATCH[3]} ))
+/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" -c "Set :CFBundleVersion $BUILD" "$APP/Contents/Info.plist"
+echo "version $VERSION (build $BUILD)"
 plutil -lint "$APP/Contents/Info.plist"
 
 echo "==> sign (ad-hoc, hardened runtime)"

@@ -63,6 +63,9 @@ public struct Config: Equatable {
     public var pauseDefault: TimeInterval = 900
     /// Time zone used to DISPLAY times (journal, pause end): "system" or an IANA id (YAML `timezone`).
     public var timezone: String = "system"
+    /// Self-update (YAML `updates`): auto (default) installs a verified new version when nothing
+    /// is frozen, notify only tells, off never contacts the update server.
+    public var updates: UpdateMode = .auto
 
     public static let `default` = Config(
         apps: [], customApps: [], allow: AllowList(), appRules: [:], appGrace: [:],
@@ -132,6 +135,7 @@ public struct Config: Equatable {
         if let v = yaml["menubar"] { c.menubar = try Config.enumValue(v, "menubar") }
         if let v = yaml["pause_default"] { c.pauseDefault = try Config.duration(v, "pause_default") }
         if let v = yaml["timezone"] { c.timezone = try Config.str(v, "timezone") }
+        if let v = yaml["updates"] { c.updates = try Config.enumValue(v, "updates") }
         if let v = yaml["trusted_networks"] {
             c.trustedNetworks = try Config.items(v, "trusted_networks").map {
                 TrustedNetwork(name: try Config.str($0["name"], "trusted_networks.name"),
@@ -212,6 +216,7 @@ public struct Config: Equatable {
             YAMLEntry("menubar", .string(menubar.rawValue)),
             YAMLEntry("pause_default", Config.fmt(pauseDefault)),
             YAMLEntry("timezone", .string(timezone)),
+            YAMLEntry("updates", .string(updates.rawValue)),
             YAMLEntry("trusted_networks", .list(trustedNetworks.map {
                 .map([YAMLEntry("name", .string($0.name)), YAMLEntry("mac", .string($0.mac)),
                       YAMLEntry("ip", .string($0.ip)), YAMLEntry("subnet", .string($0.subnet))]) })),

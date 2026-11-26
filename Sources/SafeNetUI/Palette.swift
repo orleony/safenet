@@ -70,7 +70,7 @@ public enum AccentName: Equatable {
         case .violet: return h(dark ? "#8b7bff" : "#6a55e0")
         case .orange: return h(dark ? "#ff8a4c" : "#c4560f")
         case .pink: return h(dark ? "#ff5c9a" : "#d6246e")
-        case .neutral: return h(dark ? "#cfd3e0" : "#3a3a3c")
+        case .neutral: return h(dark ? "#dededb" : "#3a3a3c")
         case .custom(let hex): return RGB(hex: hex) ?? h(dark ? "#4c9aff" : "#0071e3")
         }
     }
@@ -84,7 +84,7 @@ public struct Palette: Equatable {
 
 /// Picks the text colour for an accent fill: dark ink, white, or black, whichever first reaches 4.5:1.
 func onAccentColor(for accent: RGB) -> RGB {
-    let candidates = [RGB(hex: "#14161e")!, RGB(r: 1, g: 1, b: 1), RGB(r: 0, g: 0, b: 0)]
+    let candidates = [RGB(hex: "#0b0b0b")!, RGB(r: 1, g: 1, b: 1), RGB(r: 0, g: 0, b: 0)]
     var best = candidates[0]
     for c in candidates {
         if contrastRatio(c, accent) >= 4.5 { return c }
@@ -103,8 +103,8 @@ public func palette(theme: ThemeChoice, system: ColorScheme, accent: AccentName)
     func h(_ s: String) -> RGB { RGB(hex: s)! }
     let acc = accent.color(dark: dark)
     if dark {
-        return Palette(background: h("#1a1c25"), surface: h("#242736"), sidebar: h("#14161e"), sidebarActive: h("#2a2d3f"),
-                       text: h("#eef0f6"), muted: h("#9ba0b8"), hairline: h("#333749"),
+        return Palette(background: h("#101010"), surface: h("#1b1b1b"), sidebar: h("#0b0b0b"), sidebarActive: h("#282828"),
+                       text: h("#f4f4f2"), muted: h("#aaa9a6"), hairline: h("#343434"),
                        accent: acc, onAccent: onAccentColor(for: acc),
                        ok: h("#34d399"), frozen: h("#ffb454"), danger: h("#ff6b6b"))
     }

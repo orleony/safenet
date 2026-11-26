@@ -14,7 +14,7 @@ func registerThemeTests() {
     test("testExplicitThemeIgnoresSystem") {
         expectEqual(palette(theme: .dark, system: .light, accent: .pink), palette(theme: .dark, system: .dark, accent: .pink))
         expectEqual(palette(theme: .light, system: .light, accent: .pink), palette(theme: .light, system: .dark, accent: .pink))
-        expectEqual(palette(theme: .dark, system: .light, accent: .blue).background, RGB(hex: "#1a1c25")!)
+        expectEqual(palette(theme: .dark, system: .light, accent: .blue).background, RGB(hex: "#101010")!)
         expectEqual(palette(theme: .light, system: .dark, accent: .blue).background, RGB(hex: "#fbfbfd")!)
     }
     test("testAccentDoesNotChangeStatusColors") {
@@ -125,13 +125,13 @@ func registerSystemAppearanceTests() {
         let sys = Theme(config: cfg, appearance: a)
         cfg.theme = .light
         let forced = Theme(config: cfg, appearance: a)
-        expectEqual(sys.palette.background, RGB(hex: "#1a1c25")!)
+        expectEqual(sys.palette.background, RGB(hex: "#101010")!)
         expectEqual(forced.palette.background, RGB(hex: "#fbfbfd")!)
         style = nil; a.refresh()
         expectEqual(sys.palette.background, RGB(hex: "#fbfbfd")!)
         expectEqual(forced.palette.background, RGB(hex: "#fbfbfd")!)
         style = "Dark"; a.refresh()
-        expectEqual(sys.palette.background, RGB(hex: "#1a1c25")!)
+        expectEqual(sys.palette.background, RGB(hex: "#101010")!)
         expectEqual(forced.palette.background, RGB(hex: "#fbfbfd")!)
         expectEqual(sys.forcedScheme, nil)
         expectEqual(forced.forcedScheme, .light)

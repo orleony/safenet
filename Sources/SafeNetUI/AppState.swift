@@ -108,7 +108,7 @@ public final class AppState: ObservableObject {
         // outcome of the last install is shown once.
         let markers = UpdateMarkers(dir: s.paths.dir)
         markers.confirmLaunch(version: AppState.version)
-        if let r = markers.takeResult() {
+        if let r = markers.takeResult(currentVersion: AppState.version) {
             receiveNotice(r.message)
             notifier.post(NoticeText(title: "SafeNet", body: r.message))
         }

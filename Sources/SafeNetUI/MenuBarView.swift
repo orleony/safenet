@@ -20,6 +20,7 @@ public struct MenuBarView: View {
         }
         .padding(theme.padding + 4)
         .frame(width: 300)
+        .background(MenuWindowAnchor().frame(width: 0, height: 0))
         .background(
             ZStack {
                 GlassBackground(material: .popover)

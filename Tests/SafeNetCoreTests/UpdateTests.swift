@@ -24,12 +24,15 @@ private final class FakeInstallerSystem: InstallerSystem {
     /// The launched app confirms (removes the pending marker), like a healthy new version.
     var confirms = true
     var launches: [URL] = []
+    /// What the launched app would read at start (`update-result.json`), per launch.
+    var resultsAtLaunch: [UpdateMarkers.Result?] = []
     var stopped: [URL] = []
     var renames = 0
     var clock = Date(timeIntervalSince1970: 1_000_000)
     let pending: URL
+    let markers: UpdateMarkers
 
-    init(stateDir: URL) { pending = UpdateMarkers(dir: stateDir).pending }
+    init(stateDir: URL) { markers = UpdateMarkers(dir: stateDir); pending = markers.pending }
 
     func waitForExit(_ pid: Int32, timeout: TimeInterval) -> Bool { parentExits }
     func validate(app: URL, bundleID: String, version: String) -> String? { invalidReason }
@@ -47,7 +50,11 @@ private final class FakeInstallerSystem: InstallerSystem {
     func clearAttributes(_ url: URL) {}
     func launch(_ app: URL) -> Bool {
         launches.append(app)
-        if confirms { try? FileManager.default.removeItem(at: pending) }
+        resultsAtLaunch.append(markers.read(UpdateMarkers.Result.self, markers.result))
+        if confirms {
+            try? FileManager.default.removeItem(at: pending)
+            _ = markers.takeResult(currentVersion: "1.1.0")      // the new app shows it once
+        }
         return true
     }
     func stopInstances(of app: URL) { stopped.append(app) }
@@ -85,7 +92,8 @@ private struct InstallRig {
     }
 
     func run() -> UpdateInstaller.Outcome { UpdateInstaller(system: sys).run(plan) }
-    var result: UpdateMarkers.Result? { UpdateMarkers(dir: state).takeResult() }
+    /// The result as the given running version would show it (removes the file).
+    func result(for version: String) -> UpdateMarkers.Result? { UpdateMarkers(dir: state).takeResult(currentVersion: version) }
     /// Hidden .new / .old / .failed copies left next to the installed app.
     var leftovers: [String] {
         ((try? FileManager.default.contentsOfDirectory(atPath: apps.path)) ?? []).filter { $0.hasPrefix(".") }
@@ -199,9 +207,11 @@ func registerUpdateTests() {
         expectEqual(r.sys.launches, [r.target])
         expectEqual(r.leftovers, [], "no .new/.old copies left")
         expect(!FileManager.default.fileExists(atPath: r.staged.deletingLastPathComponent().path), "staged copy removed")
-        let res = r.result
-        expectEqual(res?.ok, true); expectEqual(res?.to, "1.1.0")
-        expect(r.result == nil, "the result is shown once")
+        expectEqual(r.sys.resultsAtLaunch.first??.to, "1.1.0", "the new version finds its result as it starts")
+        expectEqual(r.sys.resultsAtLaunch.first??.ok, true)
+        // The new version consumed it at start: nothing is left for the next launch.
+        let m = UpdateMarkers(dir: r.state)
+        expect(m.takeResult(currentVersion: "1.1.0") == nil, "not written a second time")
         try? FileManager.default.removeItem(at: r.root)
     }
 
@@ -211,7 +221,7 @@ func registerUpdateTests() {
         guard case .aborted = r.run() else { return expect(false, "aborted") }
         expectEqual(marker(r.target), "old")
         expectEqual(r.sys.launches, [], "the app still runs: nothing relaunched")
-        expectEqual(r.result?.ok, false)
+        expectEqual(r.result(for: "1.0.0")?.ok, false)
         try? FileManager.default.removeItem(at: r.root)
     }
 
@@ -248,9 +258,30 @@ func registerUpdateTests() {
         expectEqual(r.sys.stopped, [r.target], "the hung new instance is stopped first")
         expectEqual(r.leftovers, [])
         expect(!FileManager.default.fileExists(atPath: UpdateMarkers(dir: r.state).pending.path), "pending marker gone")
-        let res = r.result
-        expectEqual(res?.ok, false); expect(res?.message.contains("возвращена версия 1.0.0") == true, res?.message ?? "")
+        let res = r.sys.resultsAtLaunch.last ?? nil
+        expectEqual(res?.ok, false, "the restored old version finds the failure as it starts")
+        expect(res?.message.contains("возвращена версия 1.0.0") == true, res?.message ?? "")
+        expectEqual(r.result(for: "1.0.0")?.ok, false)
         try? FileManager.default.removeItem(at: r.root)
+    }
+
+    test("testInvalidBundleResultIsThereWhenOldRestarts") {
+        let r = InstallRig()
+        r.sys.invalidReason = "другое приложение"
+        _ = r.run()
+        expectEqual(r.sys.resultsAtLaunch.first??.ok, false, "written before the old version starts again")
+        try? FileManager.default.removeItem(at: r.root)
+    }
+
+    test("testLeftoverResultOfAnotherVersionIsDropped") {
+        let d = tmpDir("left")
+        let m = UpdateMarkers(dir: d)
+        m.write(UpdateMarkers.Result(ok: true, from: "1.0.1", to: "1.0.2", message: "SafeNet обновлён до 1.0.2"), to: m.result)
+        expect(m.takeResult(currentVersion: "1.0.3") == nil, "1.0.3 never says «обновлён до 1.0.2»")
+        expect(!FileManager.default.fileExists(atPath: m.result.path), "and the leftover is gone")
+        m.write(UpdateMarkers.Result(ok: false, from: "1.0.3", to: "1.0.4", message: "не запустилась"), to: m.result)
+        expectEqual(m.takeResult(currentVersion: "1.0.3")?.ok, false, "a failure is shown by the version that stayed")
+        try? FileManager.default.removeItem(at: d)
     }
 
     test("testUpdateMarkersConfirmOnlyThatVersion") {

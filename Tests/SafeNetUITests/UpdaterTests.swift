@@ -123,7 +123,9 @@ func registerUpdaterTests() {
         r.check(user: false)
         expectEqual(r.state, .available("1.1.0"))
         expectEqual(r.fetcher.requested.filter { $0.hasSuffix(".zip") }, [], "nothing downloaded")
-        r.check(user: true)                                  // "Обновить"
+        r.updater.checkNow(); r.drain()
+        expectEqual(r.state, .available("1.1.0"))
+        r.updater.installAvailable(); r.drain()
         expectEqual(r.plans.count, 1)
     }
 

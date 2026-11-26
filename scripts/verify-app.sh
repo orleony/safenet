@@ -218,7 +218,7 @@ echo "$OUT" | sed 's/^/       | /'
 for s in "Приложения заморожены" "ТЕСТОВЫЙ РЕЖИМ" "IP: 1.2.3.4 (RU)" "snsleeper: заморожено"; do
     echo "$OUT" | grep -qF "$s" && pass "status contains '$s'" || fail "status contains '$s'"
 done
-OUT="$(to 10 "$CLI" version 2>&1)"; [ "$OUT" = "SafeNet 1.0.0" ] && pass "safenet version: $OUT" || fail "safenet version: '$OUT'"
+OUT="$(to 10 "$CLI" version 2>&1)"; [ "$OUT" = "SafeNet $WANT_VER" ] && pass "safenet version: $OUT" || fail "safenet version: '$OUT'"
 OUT="$(to 10 "$CLI" config 2>&1)"; [ "$OUT" = "$CFG/config.yaml" ] && pass "safenet config = temp config" || fail "safenet config: '$OUT'"
 OUT="$(to 10 "$CLI" panel 2>&1)"; RC=$?
 [ $RC = 0 ] && [ "$OUT" = "Окно SafeNet открыто" ] && pass "safenet panel: $OUT (a visible panel window exists)" || fail "safenet panel: rc $RC '$OUT'"

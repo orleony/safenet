@@ -63,9 +63,9 @@ public struct Config: Equatable {
     public var pauseDefault: TimeInterval = 900
     /// Time zone used to DISPLAY times (journal, pause end): "system" or an IANA id (YAML `timezone`).
     public var timezone: String = "system"
-    /// Self-update (YAML `updates`): auto (default) installs a verified new version when nothing
+    /// Self-update (YAML `updates`): auto installs a verified new version when nothing
     /// is frozen, notify only tells, off never contacts the update server.
-    public var updates: UpdateMode = .auto
+    public var updates: UpdateMode = .notify
 
     public static let `default` = Config(
         apps: [], customApps: [], allow: AllowList(), appRules: [:], appGrace: [:],

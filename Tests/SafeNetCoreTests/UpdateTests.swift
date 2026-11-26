@@ -266,7 +266,7 @@ func registerUpdateTests() {
     }
 
     test("testConfigUpdatesKey") {
-        expectEqual(Config.default.updates, .auto)
+        expectEqual(Config.default.updates, .notify)
         let c = try Config(yaml: MiniYAML.parse("updates: notify\n"))
         expectEqual(c.updates, .notify)
         expectThrows { _ = try Config(yaml: MiniYAML.parse("updates: sometimes\n")) }

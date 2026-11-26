@@ -4,39 +4,39 @@
 <dict>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>ru</string>
-	<key>CFBundleIdentifier</key>
-	<string>local.safenet.app</string>
-	<key>CFBundleName</key>
-	<string>SafeNet</string>
 	<key>CFBundleDisplayName</key>
 	<string>SafeNet</string>
 	<key>CFBundleExecutable</key>
 	<string>SafeNetApp</string>
-	<key>CFBundlePackageType</key>
-	<string>APPL</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
+	<key>CFBundleIdentifier</key>
+	<string>local.safenet.app</string>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>SafeNet</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
 	<string>1.0.0</string>
 	<key>CFBundleVersion</key>
 	<string>1</string>
-	<key>CFBundleIconFile</key>
-	<string>AppIcon</string>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.utilities</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>13.0</string>
 	<key>LSUIElement</key>
 	<true/>
-	<key>LSApplicationCategoryType</key>
-	<string>public.app-category.utilities</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
+	<key>NSHumanReadableCopyright</key>
+	<string>SafeNet. Локальная сборка, без телеметрии.</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
 	<key>SafeNetUpdateFeed</key>
 	<string>https://github.com/orleony/safenet/releases/latest/download/update.json</string>
 	<key>SafeNetUpdatePublicKey</key>
-	<string></string>
-	<key>NSHumanReadableCopyright</key>
-	<string>SafeNet. Локальная сборка, без телеметрии.</string>
+	<string>9zAyHlXqcm9osxPChAJJHRVEyZ8pLr0Ido+vr/cBKb4=</string>
 </dict>
 </plist>

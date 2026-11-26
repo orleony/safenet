@@ -89,6 +89,7 @@ public final class Updater {
     private var ready: (manifest: UpdateManifest, app: URL)?
     private var timer: DispatchSourceTimer?
     private var waitTimer: DispatchSourceTimer?
+    private var explicitInstall = false
     private var busy = false
 
     /// Automatic checks: the first `firstDelay` after start, then whenever the last one is older
@@ -131,8 +132,8 @@ public final class Updater {
     public func stop() { timer?.cancel(); timer = nil; waitTimer?.cancel(); waitTimer = nil }
 
     /// "Проверить обновления": checks at once, whatever `updates` says; a newer version is
-    /// downloaded and installed like in auto mode (the user asked for it).
-    public func checkNow() { queue.async { self.check(userInitiated: true) } }
+    /// shown for confirmation before download.
+    public func checkNow() { queue.async { self.check(userInitiated: false, onlyReport: true) } }
 
     /// "Обновить" for a version announced in notify mode.
     public func installAvailable() { queue.async { self.check(userInitiated: true) } }
@@ -146,7 +147,7 @@ public final class Updater {
         check(userInitiated: false)
     }
 
-    func check(userInitiated: Bool) {
+    func check(userInitiated: Bool, onlyReport: Bool = false) {
         guard isEnabled, let feed = setup.feed, !busy else { return }
         if ready != nil { return attemptInstall() }
         busy = true
@@ -162,7 +163,7 @@ public final class Updater {
                         self.queue.async {
                             switch s {
                             case .failure(let e): self.fail(.network(Updater.describe(e)))
-                            case .success(let sig): self.decide(manifest, String(decoding: sig, as: UTF8.self), userInitiated)
+                            case .success(let sig): self.decide(manifest, String(decoding: sig, as: UTF8.self), userInitiated, onlyReport)
                             }
                         }
                     }
@@ -171,7 +172,7 @@ public final class Updater {
         }
     }
 
-    private func decide(_ data: Data, _ sig: String, _ userInitiated: Bool) {
+    private func decide(_ data: Data, _ sig: String, _ userInitiated: Bool, _ onlyReport: Bool) {
         lastCheck = now()
         guard let current = AppVersion(setup.version) else { return fail(.install("версия приложения не читается")) }
         let found: UpdateManifest?
@@ -184,7 +185,8 @@ public final class Updater {
             publish(.upToDate(now()))
             return
         }
-        if userInitiated || mode == .auto {
+        if !onlyReport && (userInitiated || mode == .auto) {
+            explicitInstall = userInitiated
             download(m)
         } else {
             busy = false
@@ -245,6 +247,13 @@ public final class Updater {
         safeToInstall { [weak self] ok in
             self?.queue.async {
                 guard let self = self, let r2 = self.ready, r2.app == r.app else { return }
+                if !self.explicitInstall && self.mode != .auto {
+                    self.waitTimer?.cancel()
+                    self.waitTimer = nil
+                    self.ready = nil
+                    self.publish(self.mode == .off ? .idle : .available(r2.manifest.version))
+                    return
+                }
                 if ok { self.install(r2.manifest, r2.app) } else { self.waitForSafety(r2.manifest) }
             }
         }

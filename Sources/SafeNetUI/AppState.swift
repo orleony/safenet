@@ -120,7 +120,7 @@ public final class AppState: ObservableObject {
         system?.shutdown()
     }
 
-    /// "Проверить обновления" (also installs a newer version, see `Updater.checkNow`).
+    /// "Проверить обновления" (shows the available version).
     public func checkForUpdates() { updater?.checkNow() }
     /// "Обновить" for the version announced under `updates: notify`.
     public func installUpdate() { updater?.installAvailable() }

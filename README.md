@@ -53,14 +53,12 @@ version, the archive URL (https), its size and SHA-256. A verified newer build i
 re-checked (bundle id, version, `codesign --verify --deep --strict`) and installed only while
 nothing is frozen, closed or paused: the helper `SafeNetApp --install-update …` (the current binary)
 waits for the app to quit, swaps the bundle in place with two renames, starts the new version and
-rolls back if it does not confirm within 45 s. `updates: auto | notify | off` (default auto).
+rolls back if it does not confirm within 45 s. `updates: auto | notify | off` (default notify).
 Without a public key in Info.plist updates are disabled.
 
 ```sh
-scripts/release.sh keygen            # once: private key ~/.config/safenet/update-signing.key (0600,
-                                     # back it up, never commit), public key into Resources/Info.plist
-scripts/release.sh build 1.1.0       # writes VERSION, runs tests, builds, signs dist/release/*
-scripts/release.sh publish 1.1.0     # after committing VERSION: tag v1.1.0 + GitHub release
+# Maintainer: commit the new VERSION and release changes, then run:
+scripts/release.sh publish 1.1.0     # pushes v1.1.0, triggering .github/workflows/release.yml
 ```
 
 `VERSION` holds the version; `build-app.sh` writes it into the bundle (`CFBundleVersion` =

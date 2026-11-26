@@ -5,8 +5,8 @@
 #                                          key into Resources/Info.plist (commit that change)
 #   scripts/release.sh build <x.y.z>       write VERSION, build, produce dist/release/:
 #                                          SafeNet-<x.y.z>.zip, update.json, update.json.sig
-#   scripts/release.sh publish <x.y.z>     tag v<x.y.z> and create the GitHub release with those
-#                                          files (needs `gh auth login`); installed apps then see it
+#   scripts/release.sh publish <x.y.z>     push the release tag after committing VERSION.
+#                                         GitHub Actions builds, signs and publishes the release.
 #
 # The private key lives in $SAFENET_SIGNING_KEY (default ~/.config/safenet/update-signing.key),
 # never in the repository. Losing it means installed apps can no longer verify new releases:
@@ -83,16 +83,11 @@ PY
     ;;
   publish)
     VER="${2:-}"; check_version "$VER"
-    for f in "SafeNet-$VER.zip" update.json update.json.sig; do [ -f "$OUT/$f" ] || { echo "missing dist/release/$f: run build first" >&2; exit 2; }; done
-    grep -q "\"version\": \"$VER\"" "$OUT/update.json" || { echo "dist/release is not version $VER" >&2; exit 2; }
-    [ "$(tr -d '[:space:]' < VERSION)" = "$VER" ] || { echo "VERSION is not $VER" >&2; exit 2; }
-    [ -z "$(git status --porcelain --untracked-files=no)" ] || { echo "commit VERSION (and everything else) before publishing" >&2; exit 2; }
-    SLUG="$(repo_slug)"
+    [ "$(cat VERSION)" = "$VER" ] || { echo "Set VERSION to $VER and commit first" >&2; exit 2; }
+    git diff --quiet HEAD || { echo "Commit the release changes before tagging" >&2; exit 2; }
     git tag -a "v$VER" -m "SafeNet $VER"
     git push origin "v$VER"
-    gh release create "v$VER" --repo "$SLUG" --title "SafeNet $VER" --notes-file <(/usr/bin/python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["notes"])' "$OUT/update.json") \
-      "$OUT/SafeNet-$VER.zip" "$OUT/update.json" "$OUT/update.json.sig"
-    echo "Published v$VER: installed apps find it within a day (or at once with «Проверить сейчас»)."
+    echo "Tag pushed. GitHub Actions builds and publishes the signed release."
     ;;
   *)
     sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'

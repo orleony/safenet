@@ -1,0 +1,35 @@
+name: Publish SafeNet update
+on:
+  push:
+    tags: ['v*.*.*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Validate release version
+        shell: bash
+        run: |
+          [[ "$GITHUB_REF_NAME" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]?)\.(0|[1-9][0-9]?)$ ]]
+          [[ "$GITHUB_REF_NAME" == "v$(cat VERSION)" ]]
+      - name: Test, build and sign the update
+        shell: bash
+        env:
+          RELEASE_KEY: ${{ secrets.SAFENET_RELEASE_KEY }}
+        run: |
+          export SAFENET_SIGNING_KEY="$(mktemp "$RUNNER_TEMP/safenet-key.XXXXXX")"
+          trap 'rm -f "$SAFENET_SIGNING_KEY"' EXIT
+          printf '%s\n' "$RELEASE_KEY" > "$SAFENET_SIGNING_KEY"
+          unset RELEASE_KEY
+          scripts/release.sh build "${GITHUB_REF_NAME#v}"
+      - name: Publish signed assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" --verify-tag --title "SafeNet ${GITHUB_REF_NAME#v}" --generate-notes dist/release/*

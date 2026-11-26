@@ -74,8 +74,8 @@ public struct MenuBarView: View {
 
     private var header: some View {
         let p = theme.palette
-        return HStack(spacing: theme.smallGap) {
-            StatusDot(color: stateColor(model.state, p))
+        return HStack(spacing: theme.spacing - 2) {
+            AppMark(size: 26, state: stateColor(model.state, p), ring: p.background.swiftUIColor)
             if case .paused(let until?) = model.state {
                 TimelineView(.periodic(from: Date(), by: 1)) { ctx in
                     Text("Пауза, ещё \(Format.countdown(until.timeIntervalSince(ctx.date)))")

@@ -1,7 +1,8 @@
 // Draws the SafeNet app icon with CoreGraphics (no external assets, no network) and writes a
 // complete .iconset (16…1024 px). Usage: make-icon <out.iconset> [preview.png]
-// Design: macOS-style rounded square, dark navy gradient, a blue shield with a white check mark
-// and a small six-armed "frozen" spark cut out of the shield's upper right shoulder.
+// Design, "сетевая снежинка": macOS rounded square in deep blue lit with ice from the upper left,
+// and a white six-armed flake whose arms end in network nodes around a hexagonal hub. The same
+// geometry is drawn in the app (Sources/SafeNetUI/AppMark.swift, `NetFlake`); keep both in step.
 import AppKit
 import CoreGraphics
 
@@ -10,18 +11,47 @@ func rgb(_ hex: UInt32, _ a: CGFloat = 1) -> CGColor {
             blue: CGFloat(hex & 0xff) / 255, alpha: a)
 }
 
-/// Shield outline in the 1024-unit design space (y up).
-func shieldPath() -> CGPath {
-    let p = CGMutablePath()
-    p.move(to: CGPoint(x: 512, y: 812))
-    p.addCurve(to: CGPoint(x: 722, y: 742), control1: CGPoint(x: 590, y: 772), control2: CGPoint(x: 660, y: 750))
-    p.addLine(to: CGPoint(x: 722, y: 560))
-    p.addCurve(to: CGPoint(x: 512, y: 212), control1: CGPoint(x: 722, y: 392), control2: CGPoint(x: 628, y: 276))
-    p.addCurve(to: CGPoint(x: 302, y: 560), control1: CGPoint(x: 396, y: 276), control2: CGPoint(x: 302, y: 392))
-    p.addLine(to: CGPoint(x: 302, y: 742))
-    p.addCurve(to: CGPoint(x: 512, y: 812), control1: CGPoint(x: 364, y: 750), control2: CGPoint(x: 434, y: 772))
-    p.closeSubpath()
-    return p
+// NetFlake geometry (fractions of the flake's square), as in AppMark.swift.
+let armLength: CGFloat = 0.34, nodeRadius: CGFloat = 0.062, hubRadius: CGFloat = 0.08
+let barbAt: CGFloat = 0.5, barbLength: CGFloat = 0.09, lineWidth: CGFloat = 0.046, meshOpacity: CGFloat = 0.42
+
+/// Lines, nodes and hub of the flake inside `r` (y up: the first arm points up).
+func flake(in r: CGRect) -> (lines: CGPath, nodes: CGPath, hub: CGPath, mesh: CGPath) {
+    let s = min(r.width, r.height), c = CGPoint(x: r.midX, y: r.midY)
+    let lines = CGMutablePath(), nodes = CGMutablePath(), hub = CGMutablePath(), mesh = CGMutablePath()
+    var tips: [CGPoint] = []
+    for i in 0..<6 {
+        let a = CGFloat.pi / 2 + CGFloat(i) * .pi / 3
+        let d = CGPoint(x: cos(a), y: sin(a))
+        let tip = CGPoint(x: c.x + d.x * armLength * s, y: c.y + d.y * armLength * s)
+        let nr = nodeRadius * s
+        lines.move(to: CGPoint(x: c.x + d.x * hubRadius * s, y: c.y + d.y * hubRadius * s))
+        lines.addLine(to: CGPoint(x: tip.x - d.x * nr, y: tip.y - d.y * nr))
+        tips.append(tip)
+        let mid = CGPoint(x: c.x + d.x * armLength * barbAt * s, y: c.y + d.y * armLength * barbAt * s)
+        for side in [-1.0, 1.0] as [CGFloat] {
+            let b = a + side * .pi / 4.2
+            lines.move(to: mid)
+            lines.addLine(to: CGPoint(x: mid.x + cos(b) * barbLength * s, y: mid.y + sin(b) * barbLength * s))
+        }
+        nodes.addEllipse(in: CGRect(x: tip.x - nr, y: tip.y - nr, width: nr * 2, height: nr * 2))
+    }
+    // Mesh edges between neighbouring nodes, stopping at the rings.
+    let nr = nodeRadius * s
+    for i in 0..<6 {
+        let p = tips[i], q = tips[(i + 1) % 6]
+        let len = hypot(q.x - p.x, q.y - p.y), u = CGPoint(x: (q.x - p.x) / len, y: (q.y - p.y) / len)
+        mesh.move(to: CGPoint(x: p.x + u.x * nr, y: p.y + u.y * nr))
+        mesh.addLine(to: CGPoint(x: q.x - u.x * nr, y: q.y - u.y * nr))
+    }
+    let hr = hubRadius * s
+    for i in 0..<6 {
+        let a = CGFloat.pi / 2 + CGFloat(i) * .pi / 3
+        let p = CGPoint(x: c.x + cos(a) * hr, y: c.y + sin(a) * hr)
+        if i == 0 { hub.move(to: p) } else { hub.addLine(to: p) }
+    }
+    hub.closeSubpath()
+    return (lines, nodes, hub, mesh)
 }
 
 func draw(_ ctx: CGContext, size: CGFloat) {
@@ -34,83 +64,48 @@ func draw(_ ctx: CGContext, size: CGFloat) {
     let corner: CGFloat = 186
     let bodyPath = CGPath(roundedRect: body, cornerWidth: corner, cornerHeight: corner, transform: nil)
     ctx.saveGState()
-    ctx.setShadow(offset: CGSize(width: 0, height: -10), blur: 28, color: rgb(0x000000, 0.35))
-    ctx.addPath(bodyPath); ctx.setFillColor(rgb(0x1a1c25)); ctx.fillPath()
+    ctx.setShadow(offset: CGSize(width: 0, height: -12), blur: 30, color: rgb(0x000000, 0.38))
+    ctx.addPath(bodyPath); ctx.setFillColor(rgb(0x0e1e5b)); ctx.fillPath()
     ctx.restoreGState()
 
     ctx.saveGState()
     ctx.addPath(bodyPath); ctx.clip()
-    let bg = CGGradient(colorsSpace: space, colors: [rgb(0x2a2e40), rgb(0x242736), rgb(0x1a1c25)] as CFArray,
-                        locations: [0, 0.45, 1])!
-    ctx.drawLinearGradient(bg, start: CGPoint(x: 512, y: 924), end: CGPoint(x: 512, y: 100), options: [])
-    // Faint blue glow behind the shield.
-    let glow = CGGradient(colorsSpace: space, colors: [rgb(0x4c9aff, 0.22), rgb(0x4c9aff, 0)] as CFArray,
+    // Deep blue body, lit with ice from the upper left.
+    let bg = CGGradient(colorsSpace: space, colors: [rgb(0x3da8ff), rgb(0x1d4fc4), rgb(0x0e1e5b)] as CFArray,
+                        locations: [0, 0.5, 1])!
+    ctx.drawLinearGradient(bg, start: CGPoint(x: 100, y: 924), end: CGPoint(x: 924, y: 100), options: [])
+    // Frost glow behind the flake.
+    let glow = CGGradient(colorsSpace: space, colors: [rgb(0x9feaff, 0.55), rgb(0x9feaff, 0)] as CFArray,
                           locations: [0, 1])!
-    ctx.drawRadialGradient(glow, startCenter: CGPoint(x: 512, y: 520), startRadius: 0,
-                           endCenter: CGPoint(x: 512, y: 520), endRadius: 420, options: [])
+    ctx.drawRadialGradient(glow, startCenter: CGPoint(x: 512, y: 512), startRadius: 0,
+                           endCenter: CGPoint(x: 512, y: 512), endRadius: 346, options: [])
+    // Glass sheen on the upper half.
+    let sheen = CGGradient(colorsSpace: space, colors: [rgb(0xffffff, 0.16), rgb(0xffffff, 0)] as CFArray,
+                           locations: [0, 1])!
+    ctx.drawLinearGradient(sheen, start: CGPoint(x: 512, y: 924), end: CGPoint(x: 512, y: 560), options: [])
     ctx.restoreGState()
 
     // Hairline highlight on the body edge.
     ctx.saveGState()
-    ctx.addPath(CGPath(roundedRect: body.insetBy(dx: 2, dy: 2), cornerWidth: corner - 2, cornerHeight: corner - 2,
+    ctx.addPath(CGPath(roundedRect: body.insetBy(dx: 3, dy: 3), cornerWidth: corner - 3, cornerHeight: corner - 3,
                        transform: nil))
-    ctx.setStrokeColor(rgb(0xffffff, 0.08)); ctx.setLineWidth(4); ctx.strokePath()
+    ctx.setStrokeColor(rgb(0xffffff, 0.2)); ctx.setLineWidth(5); ctx.strokePath()
     ctx.restoreGState()
 
-    // Shield: blue gradient, with a darker rim.
-    let shield = shieldPath()
+    // The flake, white, with a soft deep-blue shadow so it lifts off the glow.
+    let fr = body.insetBy(dx: 824 * 0.08, dy: 824 * 0.08)
+    let f = flake(in: fr)
+    let side = min(fr.width, fr.height)
     ctx.saveGState()
-    ctx.setShadow(offset: CGSize(width: 0, height: -12), blur: 30, color: rgb(0x000000, 0.45))
-    ctx.addPath(shield); ctx.setFillColor(rgb(0x4c9aff)); ctx.fillPath()
-    ctx.restoreGState()
-    ctx.saveGState()
-    ctx.addPath(shield); ctx.clip()
-    let blue = CGGradient(colorsSpace: space, colors: [rgb(0x7ab4ff), rgb(0x4c9aff), rgb(0x2f74e0)] as CFArray,
-                          locations: [0, 0.5, 1])!
-    ctx.drawLinearGradient(blue, start: CGPoint(x: 400, y: 812), end: CGPoint(x: 620, y: 212), options: [])
-    // Left half slightly lighter: a simple bevel.
-    ctx.clip(to: CGRect(x: 0, y: 0, width: 512, height: 1024))
-    ctx.setFillColor(rgb(0xffffff, 0.07)); ctx.fill(CGRect(x: 0, y: 0, width: 512, height: 1024))
-    ctx.restoreGState()
-    ctx.saveGState()
-    ctx.addPath(shield); ctx.setStrokeColor(rgb(0x1f5bc0, 0.9)); ctx.setLineWidth(10); ctx.strokePath()
-    ctx.restoreGState()
-
-    // Check mark.
-    ctx.saveGState()
-    let check = CGMutablePath()
-    check.move(to: CGPoint(x: 405, y: 528))
-    check.addLine(to: CGPoint(x: 486, y: 446))
-    check.addLine(to: CGPoint(x: 632, y: 618))
-    ctx.setShadow(offset: CGSize(width: 0, height: -4), blur: 8, color: rgb(0x0b2a66, 0.45))
-    ctx.addPath(check)
-    ctx.setStrokeColor(rgb(0xffffff)); ctx.setLineWidth(62); ctx.setLineCap(.round); ctx.setLineJoin(.round)
-    ctx.strokePath()
-    ctx.restoreGState()
-
-    // "Frozen" spark: a six-armed snowflake on a navy disc over the shield's upper right corner.
-    let c = CGPoint(x: 724, y: 742)
-    ctx.saveGState()
-    ctx.addEllipse(in: CGRect(x: c.x - 112, y: c.y - 112, width: 224, height: 224))
-    ctx.setFillColor(rgb(0x1e2130)); ctx.fillPath()
-    ctx.addEllipse(in: CGRect(x: c.x - 112, y: c.y - 112, width: 224, height: 224))
-    ctx.setStrokeColor(rgb(0x4c9aff, 0.55)); ctx.setLineWidth(6); ctx.strokePath()
-    let flake = CGMutablePath()
-    for i in 0..<6 {
-        let a = CGFloat(i) * .pi / 3 + .pi / 2
-        let dir = CGPoint(x: cos(a), y: sin(a))
-        let tip = CGPoint(x: c.x + dir.x * 74, y: c.y + dir.y * 74)
-        flake.move(to: c); flake.addLine(to: tip)
-        // Two small barbs per arm.
-        let mid = CGPoint(x: c.x + dir.x * 44, y: c.y + dir.y * 44)
-        for side in [-1.0, 1.0] as [CGFloat] {
-            let b = a + side * .pi / 4
-            flake.move(to: mid)
-            flake.addLine(to: CGPoint(x: mid.x + cos(b) * 26, y: mid.y + sin(b) * 26))
-        }
-    }
-    ctx.addPath(flake)
-    ctx.setStrokeColor(rgb(0xcfe3ff)); ctx.setLineWidth(15); ctx.setLineCap(.round); ctx.strokePath()
+    ctx.setShadow(offset: CGSize(width: 0, height: -8), blur: 18, color: rgb(0x0a1a52, 0.55))
+    ctx.beginTransparencyLayer(auxiliaryInfo: nil)
+    let w = lineWidth * side
+    ctx.setLineCap(.round); ctx.setLineJoin(.round)
+    ctx.addPath(f.mesh); ctx.setStrokeColor(rgb(0xffffff, meshOpacity)); ctx.setLineWidth(w * 0.55); ctx.strokePath()
+    ctx.addPath(f.lines); ctx.setStrokeColor(rgb(0xffffff)); ctx.setLineWidth(w); ctx.strokePath()
+    ctx.addPath(f.nodes); ctx.setStrokeColor(rgb(0xffffff)); ctx.setLineWidth(w); ctx.strokePath()
+    ctx.addPath(f.hub); ctx.setFillColor(rgb(0xffffff)); ctx.fillPath()
+    ctx.endTransparencyLayer()
     ctx.restoreGState()
 }
 

@@ -65,10 +65,7 @@ public struct PanelView: View {
         let p = theme.palette
         return VStack(alignment: .leading, spacing: 3) {
             HStack(spacing: theme.smallGap + 2) {
-                Image(systemName: "shield.lefthalf.filled")
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundColor(stateColor(model.state, p).swiftUIColor)
-                    .accessibilityHidden(true)
+                AppMark(size: 24, state: stateColor(model.state, p), ring: p.sidebar.swiftUIColor)
                 Text("SafeNet").font(theme.display(16, weight: .bold)).foregroundColor(p.text.swiftUIColor)
             }
             .padding(.horizontal, theme.spacing - 4)

@@ -197,7 +197,7 @@ public func runCLIClient(_ args: [String], environment: [String: String] = Proce
     let paths = AppPaths.from(environment: environment)
     switch cmd {
     case .config: out(paths.config.path); return 0
-    case .version: out("SafeNet \(AppState.version)"); return 0
+    case .version: out("SafeNet \(AppState.displayVersion)"); return 0
     default: break
     }
     switch IPCClient.send(cmd, path: paths.socketPath, timeout: 2) {

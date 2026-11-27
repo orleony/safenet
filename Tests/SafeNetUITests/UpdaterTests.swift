@@ -159,6 +159,18 @@ func registerUpdaterTests() {
         expectEqual(r.fetcher.requested, [], "no network at all")
     }
 
+    test("testDevBuildNeverUpdates") {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("dev-\(UUID().uuidString)/SafeNet.app")
+        try? FileManager.default.createDirectory(at: dir.appendingPathComponent("Contents"), withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir.deletingLastPathComponent()) }
+        let info: [String: Any] = ["CFBundleIdentifier": "local.safenet.app", "CFBundleShortVersionString": "1.0.6",
+                                   "CFBundleExecutable": "SafeNetApp", "CFBundlePackageType": "APPL", "SafeNetChannel": "dev"]
+        (info as NSDictionary).write(to: dir.appendingPathComponent("Contents/Info.plist"), atomically: true)
+        guard let b = Bundle(url: dir) else { return expect(false, "bundle") }
+        let s = UpdaterSetup.current(bundle: b, environment: [:], testMode: false)
+        expect(s.disabledReason?.contains("разработческая") == true, s.disabledReason ?? "nil")
+    }
+
     test("testUpdaterSetupFromBundle") {
         let s = UpdaterSetup.current(bundle: .main, environment: [:], testMode: false)
         expect(s.disabledReason != nil, "the test binary is not an .app")

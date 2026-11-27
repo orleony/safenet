@@ -1,6 +1,8 @@
 #!/bin/bash
 # Build the distributable SafeNet.app (universal x86_64 + arm64, ad-hoc signed) and SafeNet.zip.
-# Usage: scripts/build-app.sh
+# Usage: scripts/build-app.sh [--dev]
+#   --dev  developer build: no update feed / key in Info.plist (the self-updater is off, so a
+#          test build is never replaced by a release), SafeNetChannel=dev, version x.y.z-dev shown.
 # Output (dist/ is a build artefact, not committed):
 #   dist/SafeNet.app            the app (Contents/MacOS/SafeNetApp is also the watchdog and the CLI)
 #   dist/safenet                console command (shell wrapper that runs the app's binary in CLI mode)
@@ -9,6 +11,8 @@
 # Nothing is installed anywhere: no /Applications, no /usr/local, no login item.
 set -euo pipefail
 cd "$(dirname "$0")/.." || exit 2
+DEV=0
+[ "${1:-}" = "--dev" ] && DEV=1
 ROOT="$PWD"
 DIST="$ROOT/dist"
 APP="$DIST/SafeNet.app"
@@ -38,6 +42,11 @@ VERSION="$(tr -d '[:space:]' < VERSION)"
 [[ "$VERSION" =~ ^([0-9]+)\.([0-9]{1,2})\.([0-9]{1,2})$ ]] || { echo "VERSION must be x.y.z (y, z < 100), got '$VERSION'" >&2; exit 2; }
 BUILD=$(( BASH_REMATCH[1] * 10000 + 10#${BASH_REMATCH[2]} * 100 + 10#${BASH_REMATCH[3]} ))
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" -c "Set :CFBundleVersion $BUILD" "$APP/Contents/Info.plist"
+if [ "$DEV" = 1 ]; then
+  /usr/libexec/PlistBuddy -c "Delete :SafeNetUpdateFeed" -c "Delete :SafeNetUpdatePublicKey" \
+    -c "Add :SafeNetChannel string dev" "$APP/Contents/Info.plist"
+  echo "DEV build: self-updater off"
+fi
 echo "version $VERSION (build $BUILD)"
 plutil -lint "$APP/Contents/Info.plist"
 

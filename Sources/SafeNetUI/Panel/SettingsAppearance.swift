@@ -117,7 +117,7 @@ struct SystemSettings: View {
             UpdateSettings(model: model)
             Card {
                 CardTitle("О программе")
-                Text("SafeNet, версия \(AppState.version)").font(theme.font(12)).foregroundColor(p.text.swiftUIColor)
+                Text("SafeNet, версия \(AppState.displayVersion)").font(theme.font(12)).foregroundColor(p.text.swiftUIColor)
                 Note("Окно утечки. На события сети (VPN отключился, сменился интерфейс или маршрут) SafeNet реагирует за десятки–сотни миллисекунд. Но если IP меняется «тихо» — например, VPN переключил сервер без смены интерфейса, — это заметит только опрос, то есть в пределах интервала проверки (сейчас \(DurationInput.text(model.config.checkInterval)) с). SafeNet дополняет, а не заменяет kill switch самого VPN: включите и его.")
                 Note("Приватность. Наружу уходят только запросы к IP-сервисам (каждые 5 с — Cloudflare 1.1.1.1 и api.country.is; полная проверка с ipinfo.io, ipapi.co, ifconfig.co, v6.ident.me — при смене сети, по кнопке и раз в 10 минут) и к /cdn-cgi/trace пяти ИИ-сервисов. Если обновления не выключены, раз в сутки — к github.com за описанием новой версии (и за архивом, когда она есть). Никакой телеметрии и аналитики; настройки и журнал остаются на этом Mac.")
             }

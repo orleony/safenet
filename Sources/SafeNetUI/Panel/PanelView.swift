@@ -89,6 +89,12 @@ public struct PanelView: View {
                     HStack(spacing: theme.smallGap) {
                         AppMark(size: 20)
                         Text("SafeNet").font(theme.font(14, weight: .semibold))
+                        if AppState.isDevBuild {
+                            Text("DEV").font(theme.font(9, weight: .bold)).foregroundColor(p.frozen.swiftUIColor)
+                                .padding(.horizontal, 5).padding(.vertical, 1)
+                                .background(Capsule().fill(p.frozen.swiftUIColor.opacity(0.18)))
+                                .help("Разработческая сборка: обновления выключены")
+                        }
                     }
                     .foregroundColor(p.text.swiftUIColor)
                     .frame(maxWidth: .infinity)

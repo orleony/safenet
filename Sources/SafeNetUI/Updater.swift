@@ -50,7 +50,9 @@ public struct UpdaterSetup: Equatable {
         let isApp = bundle.bundleURL.pathExtension == "app"
         var s = UpdaterSetup(feed: URL(string: feedText), publicKey: key, bundleURL: isApp ? bundle.bundleURL : nil,
                              bundleID: bundle.bundleIdentifier, version: version)
-        if !isApp || s.bundleID == nil {
+        if (info["SafeNetChannel"] as? String) == "dev" && env["SAFENET_UPDATE_FEED"] == nil {
+            s.disabledReason = "разработческая сборка: обновления выключены, её не заменит релиз"
+        } else if !isApp || s.bundleID == nil {
             s.disabledReason = "обновление работает только из SafeNet.app"
         } else if key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || s.feed == nil {
             s.disabledReason = "в этой сборке не задан ключ проверки обновлений"

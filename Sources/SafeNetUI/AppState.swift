@@ -232,6 +232,11 @@ public final class AppState: ObservableObject {
         (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String) ?? "разработческая сборка"
     }
 
+    /// Built with `scripts/build-app.sh --dev`: the self-updater is off.
+    public static var isDevBuild: Bool { (Bundle.main.object(forInfoDictionaryKey: "SafeNetChannel") as? String) == "dev" }
+    /// Version for people: "1.0.6 (dev)" for a developer build.
+    public static var displayVersion: String { version + (isDevBuild ? " (dev)" : "") }
+
     /// Lines for the windows, in order: config error (red), autostart error (red), notice (neutral).
     public var messages: [(text: String, isError: Bool)] {
         var out: [(text: String, isError: Bool)] = []

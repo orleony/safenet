@@ -39,7 +39,7 @@ SafeNet реагирует на события macOS и регулярно св�
 
 ## Установка
 
-**[Скачать SafeNet 1.0.7 (.zip)](https://github.com/orleony/safenet/releases/download/v1.0.7/SafeNet-1.0.7.zip)** · [Последняя версия](https://github.com/orleony/safenet/releases/latest) · [История релизов](https://github.com/orleony/safenet/releases)
+**[Скачать](https://github.com/orleony/safenet/releases/latest)** · [История релизов](https://github.com/orleony/safenet/releases)
 
 Архив содержит готовый `SafeNet.app` для Intel и Apple Silicon и текстовую инструкцию.
 
